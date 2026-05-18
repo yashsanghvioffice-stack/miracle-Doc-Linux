@@ -1,22 +1,46 @@
 #!/usr/bin/env python3
 """
-Miracle Cloud Gateway - Router API (v3.4)
+Miracle Cloud Gateway - Router API (v3.5)
 
-CHANGES vs v3.3.1
-    - REMOVED: /cgi-bin/hb.exe proxy route (no longer needed)
-    - REMOVED: remoteapp_sessions table dependency
-    - NEW: /rdp/download/<token> route -- generates a one-time .rdp file
-    - NEW: /login with preference=remote returns rdp_url in JSON response
-    - NEW: rdp_download_tokens table tracks one-time download tokens
+CHANGES vs v3.4 (additive -- uKey edition)
+    - NEW: clients table required (see migrate_v6.py).
+           Holds (client_name, ukey) -- one row per tenant.
+    - NEW: /login now requires a `ukey` form/JSON field.
+           Strict bind: (username, ukey) must match the same row when
+           users is joined with clients on client_name. A bad uKey fails
+           fast (INVALID_UKEY) BEFORE TSplus is called. Same for both
+           preference=html5 and preference=remote.
+    - NEW: miracle_ukey cookie set on login success (30 days, JS-readable,
+           SameSite=Lax). Used by the login page to recover the uKey
+           after logout and across reloads. Coexists with all 16 TSplus
+           fingerprint cookies -- displaces nothing.
+    - NEW: /logout preserves miracle_ukey cookie and redirects to
+           /?uKey=<value> instead of /.
+    - NEW: /admin/clients/* CRUD (list, create, get-by-id, get-by-name,
+           exists, update, delete).
+    - CHANGED: POST /admin/users now requires the client_name to exist
+               in the clients table -- returns 400 UNKNOWN_CLIENT
+               otherwise. Same for PUT when client_name is sent.
+    - CHANGED: DELETE /admin/users/by-client/<name> now also deletes
+               the matching clients row (cascade). Response gains
+               `client_deleted` and `ukey` fields. Still 200 even when
+               nothing existed.
+    - CHANGED: /health and /admin/stats add total_clients.
 
-  Why: The previous remoteapps:// protocol-handler approach required an
-  unsigned third-party plugin and was less secure. New approach uses
-  Windows' native mstsc.exe with a downloaded .rdp file. mstsc prompts
-  the user for password each time, so no credentials are stored anywhere.
+UNCHANGED FROM v3.4
+    - TSplus fingerprint cookies (all 16). Sent on auth + set on response.
+    - .rdp download flow (token issue, /rdp/download/<token>, build_rdp_content).
+    - server_master CRUD.
+    - users CRUD filters (active_only, client_name, server_id), enable/disable.
+    - validate_user_payload, validate_server_payload, parse_body, USER_SELECT.
+    - Error response shape: {status:"error", code:"...", message:"..."}.
+    - verify_schema() at startup. Schema ownership is external (migrate_*.py).
 
 SCHEMA OWNERSHIP
-    This file does NOT create or alter tables. DDL lives in migrate_*.py.
-    Run migrate_v3.py + migrate_v5.py before using v3.4.
+    This file does NOT create or alter tables. DDL lives in:
+        migrate_v3.py   -- server_master, users
+        migrate_v5.py   -- rdp_download_tokens
+        migrate_v6.py   -- clients                          (NEW)
 
 ENV
     MIRACLE_API_KEY  Required. Shared secret for /admin/* routes.
@@ -45,11 +69,16 @@ DB_PATH         = os.environ.get("MIRACLE_DB_PATH", "/etc/miracle-registry/mirac
 API_KEY         = os.environ.get("MIRACLE_API_KEY", "")
 LOG_PATH        = "/var/log/miracle-router.log"
 TSPLUS_TIMEOUT  = 10
-REQUIRED_TABLES = ("server_master", "users", "rdp_download_tokens")
+REQUIRED_TABLES = ("server_master", "users", "rdp_download_tokens", "clients")
 
 # RemoteApp .rdp file settings
 TSPLUS_RDP_PORT = 59359           # same for all TSplus servers
 RDP_TOKEN_TTL_SECONDS = 300       # 5 minutes
+
+# uKey cookie -- long-lived, JS-readable so the login page can recover
+# after logout / reload without keeping the user logged in.
+UKEY_COOKIE_NAME    = "miracle_ukey"
+UKEY_COOKIE_MAX_AGE = 30 * 24 * 3600   # 30 days
 
 # Redirect targets per preference
 REDIRECT_HTML5  = "/workspace"
@@ -62,6 +91,8 @@ MOBILE_RE      = re.compile(r"^\+?[0-9]{7,15}$")
 IPV4_RE        = re.compile(r"^(\d{1,3}\.){3}\d{1,3}$")
 SERVER_NAME_RE = re.compile(r"^[A-Za-z0-9_\-\. ]{1,64}$")
 TOKEN_RE       = re.compile(r"^[a-f0-9]{32}$")
+UKEY_RE        = re.compile(r"^[A-Za-z0-9]{8}$")
+CLIENT_NAME_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
 
 # TSplus browser fingerprint cookies. DO NOT change.
 TSPLUS_REQUEST_COOKIES = {
@@ -196,7 +227,8 @@ def verify_schema():
             "FATAL: Database file not found at {}\n"
             "       Run the migrations first:\n"
             "         sudo python3 migrate_v3.py    # base tables\n"
-            "         sudo python3 migrate_v5.py    # rdp_download_tokens"
+            "         sudo python3 migrate_v5.py    # rdp_download_tokens\n"
+            "         sudo python3 migrate_v6.py    # clients (uKey)"
         ).format(DB_PATH)
         log.error(msg)
         sys.stderr.write(msg + "\n")
@@ -217,16 +249,17 @@ def verify_schema():
 
     missing = [t for t in REQUIRED_TABLES if t not in existing]
     if missing:
-        if "rdp_download_tokens" in missing and len(missing) == 1:
-            msg = (
-                "FATAL: Required table missing in {}: rdp_download_tokens\n"
-                "       Run:  sudo python3 migrate_v5.py"
-            ).format(DB_PATH)
-        else:
-            msg = (
-                "FATAL: Required tables missing in {}: {}\n"
-                "       Run migrate_v3.py and migrate_v5.py."
-            ).format(DB_PATH, ", ".join(missing))
+        hints = []
+        if "rdp_download_tokens" in missing:
+            hints.append("  sudo python3 migrate_v5.py    # rdp_download_tokens")
+        if "clients" in missing:
+            hints.append("  sudo python3 migrate_v6.py    # clients (uKey)")
+        if "server_master" in missing or "users" in missing:
+            hints.append("  sudo python3 migrate_v3.py    # base tables")
+        msg = (
+            "FATAL: Required tables missing in {}: {}\n"
+            "       Run:\n{}"
+        ).format(DB_PATH, ", ".join(missing), "\n".join(hints) if hints else "  (see migrate_*.py)")
         log.error(msg)
         sys.stderr.write(msg + "\n")
         sys.exit(1)
@@ -356,6 +389,7 @@ def health():
             users    = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
             active   = conn.execute("SELECT COUNT(*) FROM users WHERE is_active=1").fetchone()[0]
             srvs     = conn.execute("SELECT COUNT(*) FROM server_master").fetchone()[0]
+            clients_count = conn.execute("SELECT COUNT(*) FROM clients").fetchone()[0]
             tokens   = conn.execute(
                 "SELECT COUNT(*) FROM rdp_download_tokens WHERE used_at IS NULL"
             ).fetchone()[0]
@@ -364,6 +398,7 @@ def health():
             "users":         users,
             "active":        active,
             "servers":       srvs,
+            "total_clients": clients_count,
             "pending_rdp_tokens": tokens,
         })
     except Exception as e:
@@ -383,25 +418,35 @@ def _cleanup_old_rdp_tokens(conn):
 def login():
     """
     Login flow.
-      - Validates credentials against SQLite (must be active)
-      - Calls TSplus action=cp to verify password against Windows
-      - On success with preference=html5: returns {redirect:"/workspace"}
+      - Reads username, password, preference (html5|remote), ukey.
+      - Validates field formats. uKey is REQUIRED (v3.5).
+      - SQLite strict bind: users JOIN clients ON client_name (NOCASE)
+        WHERE username = ? AND clients.ukey = ?
+      - User must be is_active=1.
+      - Calls TSplus action=cp to verify password against Windows.
+      - On success with preference=html5: returns {redirect:"/workspace"}.
       - On success with preference=remote: generates a one-time download
         token for the .rdp file, returns {redirect:"/workspace-remote",
-        rdp_url:"/rdp/download/<token>"}
+        rdp_url:"/rdp/download/<token>"}.
+      - Sets miracle_ukey cookie (30 days, JS-readable) so the login
+        page can recover the uKey after logout / reload.
+      - All 16 TSplus fingerprint cookies are set on the response as
+        before; miracle_ukey is purely additive.
 
     The .rdp download is gated by the token (single-use, 5 min TTL).
     Password is NOT stored anywhere -- mstsc will prompt the user.
     """
     if request.content_type and 'application/json' in request.content_type:
         data       = request.get_json(silent=True) or {}
-        username   = data.get('username', '').strip()
-        password   = data.get('password', '').strip()
+        username   = data.get('username',   '').strip()
+        password   = data.get('password',   '').strip()
         preference = data.get('preference', 'html5').strip().lower()
+        ukey       = data.get('ukey',       '').strip()
     else:
-        username   = request.form.get('username', '').strip()
-        password   = request.form.get('password', '').strip()
+        username   = request.form.get('username',   '').strip()
+        password   = request.form.get('password',   '').strip()
         preference = request.form.get('preference', 'html5').strip().lower()
+        ukey       = request.form.get('ukey',       '').strip()
 
     if preference not in ('html5', 'remote'):
         preference = 'html5'
@@ -415,20 +460,37 @@ def login():
     if not password:
         return jsonify({"status": "error", "code": "MISSING_FIELDS",
                         "message": "Password required"}), 400
+    if not ukey:
+        return jsonify({"status": "error", "code": "MISSING_UKEY",
+                        "message": "Access link required."}), 400
+    if not UKEY_RE.match(ukey):
+        log.warning("Login: bad ukey format for '%s' from %s",
+                    username, request.remote_addr)
+        return jsonify({"status": "error", "code": "INVALID_UKEY",
+                        "message": "Invalid access link."}), 400
 
-    # 1. SQLite lookup
+    # 1. SQLite strict bind: username + ukey must point to the same row
+    #    via users.client_name == clients.client_name.
     with db() as conn:
         row = conn.execute("""
-            SELECT u.id, u.username, u.is_active, s.server_ip
+            SELECT u.id, u.username, u.is_active,
+                   u.client_name, c.ukey AS bound_ukey,
+                   s.server_ip
             FROM   users u
+            JOIN   clients       c ON c.client_name = u.client_name COLLATE NOCASE
             JOIN   server_master s ON s.id = u.server_id
             WHERE  u.username = ?
-        """, (username,)).fetchone()
+              AND  c.ukey     = ? COLLATE NOCASE
+        """, (username, ukey)).fetchone()
 
     if not row:
-        log.warning("Login: unknown user '%s' from %s", username, request.remote_addr)
+        # Could be: unknown user, wrong uKey for this user, or user's
+        # client has no clients-table row yet. Same surface error -- do
+        # not leak which.
+        log.warning("Login bind MISS: user='%s' ukey=%s from %s",
+                    username, ukey, request.remote_addr)
         return jsonify({"status": "error", "code": "INVALID_CREDENTIALS",
-                        "message": "Invalid username or password"}), 401
+                        "message": "Invalid access link or credentials."}), 401
 
     if row["is_active"] != 1:
         log.warning("Login rejected: disabled account '%s'", username)
@@ -494,7 +556,8 @@ def login():
         return jsonify({"status": "error", "code": "INVALID_CREDENTIALS",
                         "message": "Invalid username or password"}), 401
 
-    log.info("Login OK: '%s' -> %s (pref=%s)", username, ip, preference)
+    log.info("Login OK: '%s' -> %s (pref=%s ukey=%s client=%s)",
+             username, ip, preference, ukey, row["client_name"])
 
     # 3. Build response based on preference
     response_payload = {
@@ -533,16 +596,49 @@ def login():
     for name, value in cookies.items():
         resp.set_cookie(name, value, path='/', samesite='Lax')
 
+    # uKey cookie -- long-lived, JS-readable, additive. Used by the
+    # login page to recover the uKey after logout or page reload.
+    resp.set_cookie(
+        UKEY_COOKIE_NAME, ukey,
+        path='/',
+        max_age=UKEY_COOKIE_MAX_AGE,
+        samesite='Lax',
+        httponly=False,
+    )
+
     return resp
 
 
 @app.route("/logout", methods=["GET", "POST"])
 def logout():
-    resp = make_response(redirect('/'))
+    """Clear session cookies. Preserve miracle_ukey and redirect to
+    /?uKey=<value> so the user can immediately sign in again."""
+    preserved_ukey = (request.cookies.get(UKEY_COOKIE_NAME) or "").strip()
+    if UKEY_RE.match(preserved_ukey):
+        target = "/?uKey={}".format(preserved_ukey)
+    else:
+        preserved_ukey = ""
+        target = "/"
+
+    resp = make_response(redirect(target))
+
     to_clear = list(TSPLUS_REQUEST_COOKIES.keys()) + ['miracle_target', 'username_Editbox1']
     for name in to_clear:
         resp.set_cookie(name, '', expires=0, path='/')
-    log.info("Logout from %s", request.remote_addr)
+
+    # Re-set the uKey cookie (preserve it across logout). If the user
+    # had no valid uKey cookie, leave it absent.
+    if preserved_ukey:
+        resp.set_cookie(
+            UKEY_COOKIE_NAME, preserved_ukey,
+            path='/',
+            max_age=UKEY_COOKIE_MAX_AGE,
+            samesite='Lax',
+            httponly=False,
+        )
+
+    log.info("Logout from %s (ukey preserved: %s)",
+             request.remote_addr, preserved_ukey or "(none)")
     return resp
 
 
@@ -741,6 +837,255 @@ def server_delete(server_id):
 
 
 # ============================================================
+#  ADMIN: clients CRUD       (NEW in v3.5)
+# ============================================================
+
+@app.route("/admin/clients", methods=["POST"])
+@require_api_key
+def client_create():
+    """Create a (client_name, ukey) row. PowerShell Setup calls this
+    BEFORE creating any user."""
+    data = parse_body()
+
+    client_name = str(data.get("client_name", "") or "").strip()
+    ukey        = str(data.get("ukey",        "") or "").strip()
+
+    if not client_name:
+        return jsonify({"error": "Missing required field: client_name"}), 400
+    if not CLIENT_NAME_RE.match(client_name):
+        return jsonify({"error": "client_name must be 1-64 chars [A-Za-z0-9_-]"}), 400
+    if not ukey:
+        return jsonify({"error": "Missing required field: ukey"}), 400
+    if not UKEY_RE.match(ukey):
+        return jsonify({"error": "ukey must be 8 alphanumeric chars"}), 400
+
+    try:
+        with db() as conn:
+            cur = conn.execute(
+                "INSERT INTO clients (client_name, ukey) VALUES (?, ?)",
+                (client_name, ukey),
+            )
+            new_id = cur.lastrowid
+            row = conn.execute(
+                "SELECT * FROM clients WHERE id = ?", (new_id,)
+            ).fetchone()
+    except sqlite3.IntegrityError as e:
+        msg = str(e).lower()
+        # Surface which field clashed
+        with db() as conn:
+            by_name = conn.execute(
+                "SELECT id, client_name, ukey FROM clients WHERE client_name = ? COLLATE NOCASE",
+                (client_name,),
+            ).fetchone()
+            by_ukey = conn.execute(
+                "SELECT id, client_name, ukey FROM clients WHERE ukey = ? COLLATE NOCASE",
+                (ukey,),
+            ).fetchone()
+        if by_name:
+            return jsonify({
+                "error":                "client_name already exists",
+                "existing_id":          by_name["id"],
+                "existing_client_name": by_name["client_name"],
+                "existing_ukey":        by_name["ukey"],
+            }), 409
+        if by_ukey:
+            return jsonify({
+                "error":                "ukey already in use",
+                "existing_id":          by_ukey["id"],
+                "existing_client_name": by_ukey["client_name"],
+                "existing_ukey":        by_ukey["ukey"],
+            }), 409
+        return jsonify({"error": "Conflict", "detail": str(e)}), 409
+
+    log.info("Client created: id=%s name=%s ukey=%s", new_id, client_name, ukey)
+    return jsonify(dict(row)), 201
+
+
+@app.route("/admin/clients", methods=["GET"])
+@require_api_key
+def client_list():
+    with db() as conn:
+        rows = conn.execute("""
+            SELECT c.*,
+                   (SELECT COUNT(*) FROM users u
+                      WHERE u.client_name = c.client_name COLLATE NOCASE) AS user_count
+            FROM   clients c
+            ORDER  BY c.client_name
+        """).fetchall()
+    return jsonify({"clients": [dict(r) for r in rows], "count": len(rows)})
+
+
+@app.route("/admin/clients/<int:client_id>", methods=["GET"])
+@require_api_key
+def client_get(client_id):
+    with db() as conn:
+        row = conn.execute(
+            "SELECT * FROM clients WHERE id = ?", (client_id,)
+        ).fetchone()
+        if not row:
+            return jsonify({"error": "Client not found"}), 404
+        users = conn.execute(
+            "SELECT id, username, is_active FROM users "
+            "WHERE client_name = ? COLLATE NOCASE ORDER BY username",
+            (row["client_name"],),
+        ).fetchall()
+    out = dict(row)
+    out["users"] = [dict(u) for u in users]
+    out["user_count"] = len(users)
+    return jsonify(out)
+
+
+@app.route("/admin/clients/by-name/<client_name>", methods=["GET"])
+@require_api_key
+def client_by_name(client_name):
+    if not CLIENT_NAME_RE.match(client_name or ""):
+        return jsonify({"error": "invalid client_name"}), 400
+    with db() as conn:
+        row = conn.execute(
+            "SELECT * FROM clients WHERE client_name = ? COLLATE NOCASE",
+            (client_name,),
+        ).fetchone()
+        if not row:
+            return jsonify({"error": "Client not found"}), 404
+        users = conn.execute(
+            "SELECT id, username, is_active FROM users "
+            "WHERE client_name = ? COLLATE NOCASE ORDER BY username",
+            (row["client_name"],),
+        ).fetchall()
+    out = dict(row)
+    out["users"] = [dict(u) for u in users]
+    out["user_count"] = len(users)
+    return jsonify(out)
+
+
+@app.route("/admin/clients/exists/<client_name>", methods=["GET"])
+@require_api_key
+def client_exists(client_name):
+    """Duplicate-check endpoint. ALWAYS returns 200. Used by
+    MiracleCloud-Setup.ps1 pre-flight."""
+    if not CLIENT_NAME_RE.match(client_name or ""):
+        return jsonify({"exists": False, "error": "invalid client_name"}), 200
+
+    with db() as conn:
+        row = conn.execute(
+            "SELECT id, client_name, ukey FROM clients WHERE client_name = ? COLLATE NOCASE",
+            (client_name,),
+        ).fetchone()
+        if not row:
+            return jsonify({"exists": False})
+
+        user_count = conn.execute(
+            "SELECT COUNT(*) FROM users WHERE client_name = ? COLLATE NOCASE",
+            (row["client_name"],),
+        ).fetchone()[0]
+
+        # Most-common server for this client (informational)
+        srv = conn.execute("""
+            SELECT s.server_ip, s.server_name, COUNT(u.id) AS n
+            FROM   users u
+            JOIN   server_master s ON s.id = u.server_id
+            WHERE  u.client_name = ? COLLATE NOCASE
+            GROUP  BY u.server_id
+            ORDER  BY n DESC
+            LIMIT  1
+        """, (row["client_name"],)).fetchone()
+
+    out = {
+        "exists":      True,
+        "id":          row["id"],
+        "client_name": row["client_name"],
+        "ukey":        row["ukey"],
+        "user_count":  user_count,
+    }
+    if srv:
+        out["server_ip"]   = srv["server_ip"]
+        out["server_name"] = srv["server_name"]
+    return jsonify(out)
+
+
+@app.route("/admin/clients/<int:client_id>", methods=["PUT"])
+@require_api_key
+def client_update(client_id):
+    data = parse_body()
+
+    cleaned = {}
+    if "client_name" in data:
+        v = str(data["client_name"] or "").strip()
+        if not v:
+            return jsonify({"error": "client_name cannot be empty"}), 400
+        if not CLIENT_NAME_RE.match(v):
+            return jsonify({"error": "client_name must be 1-64 chars [A-Za-z0-9_-]"}), 400
+        cleaned["client_name"] = v
+    if "ukey" in data:
+        v = str(data["ukey"] or "").strip()
+        if not UKEY_RE.match(v):
+            return jsonify({"error": "ukey must be 8 alphanumeric chars"}), 400
+        cleaned["ukey"] = v
+
+    if not cleaned:
+        return jsonify({"error": "No fields to update"}), 400
+
+    with db() as conn:
+        existing = conn.execute(
+            "SELECT * FROM clients WHERE id = ?", (client_id,)
+        ).fetchone()
+        if not existing:
+            return jsonify({"error": "Client not found"}), 404
+
+        try:
+            # Cascade the new client_name into users (denormalized FK)
+            if "client_name" in cleaned and cleaned["client_name"].lower() != existing["client_name"].lower():
+                conn.execute(
+                    "UPDATE users SET client_name = ? WHERE client_name = ? COLLATE NOCASE",
+                    (cleaned["client_name"], existing["client_name"]),
+                )
+
+            sets   = ", ".join("{} = ?".format(k) for k in cleaned.keys())
+            params = list(cleaned.values()) + [client_id]
+            conn.execute(
+                "UPDATE clients SET {} WHERE id = ?".format(sets),
+                params,
+            )
+        except sqlite3.IntegrityError as e:
+            msg = str(e).lower()
+            if "client_name" in msg:
+                return jsonify({"error": "client_name already exists"}), 409
+            if "ukey" in msg:
+                return jsonify({"error": "ukey already in use"}), 409
+            return jsonify({"error": "Conflict", "detail": str(e)}), 409
+
+        row = conn.execute(
+            "SELECT * FROM clients WHERE id = ?", (client_id,)
+        ).fetchone()
+
+    log.info("Client updated: id=%s fields=%s", client_id, list(cleaned.keys()))
+    return jsonify(dict(row))
+
+
+@app.route("/admin/clients/<int:client_id>", methods=["DELETE"])
+@require_api_key
+def client_delete(client_id):
+    """Delete the clients row only. Does NOT touch users.
+    Use DELETE /admin/users/by-client/<name> for full cascade."""
+    with db() as conn:
+        row = conn.execute(
+            "SELECT * FROM clients WHERE id = ?", (client_id,)
+        ).fetchone()
+        if not row:
+            return jsonify({"error": "Client not found"}), 404
+        conn.execute("DELETE FROM clients WHERE id = ?", (client_id,))
+
+    log.info("Client deleted (row only): id=%s name=%s",
+             client_id, row["client_name"])
+    return jsonify({
+        "deleted":     True,
+        "id":          client_id,
+        "client_name": row["client_name"],
+        "ukey":        row["ukey"],
+    })
+
+
+# ============================================================
 #  ADMIN: users CRUD
 # ============================================================
 
@@ -767,6 +1112,18 @@ def user_create():
         ).fetchone()
         if not srv:
             return jsonify({"error": "server_id {} does not exist".format(cleaned['server_id'])}), 400
+
+        # client_name MUST exist in clients table (uKey precondition)
+        client_row = conn.execute(
+            "SELECT id FROM clients WHERE client_name = ? COLLATE NOCASE",
+            (cleaned["client_name"],),
+        ).fetchone()
+        if not client_row:
+            return jsonify({
+                "error": "UNKNOWN_CLIENT",
+                "hint":  "Create the client first via POST /admin/clients "
+                         "with client_name='{}'".format(cleaned["client_name"]),
+            }), 400
 
         try:
             cur = conn.execute("""
@@ -852,6 +1209,18 @@ def user_update(user_id):
             if not srv:
                 return jsonify({"error": "server_id {} does not exist".format(cleaned['server_id'])}), 400
 
+        if "client_name" in cleaned:
+            client_row = conn.execute(
+                "SELECT id FROM clients WHERE client_name = ? COLLATE NOCASE",
+                (cleaned["client_name"],),
+            ).fetchone()
+            if not client_row:
+                return jsonify({
+                    "error": "UNKNOWN_CLIENT",
+                    "hint":  "Create the client first via POST /admin/clients "
+                             "with client_name='{}'".format(cleaned["client_name"]),
+                }), 400
+
         sets   = ", ".join("{} = ?".format(k) for k in cleaned.keys())
         params = list(cleaned.values()) + [user_id]
 
@@ -919,17 +1288,44 @@ def user_enable(user_id):
 @app.route("/admin/users/by-client/<client_name>", methods=["DELETE"])
 @require_api_key
 def user_delete_by_client(client_name):
+    """Cascade: delete all users for this client, AND remove the
+    matching clients row (which holds the uKey). Single-call cleanup
+    for MiracleCloud-Delete.ps1.
+
+    Returns 200 even when nothing existed (v3.4 behavior preserved),
+    with both `deleted` and `client_deleted` set to 0 in that case."""
     with db() as conn:
         rows = conn.execute(
             "SELECT id, username FROM users WHERE client_name = ?", (client_name,)
         ).fetchall()
-        if not rows:
-            return jsonify({"deleted": 0, "usernames": []})
-        conn.execute("DELETE FROM users WHERE client_name = ?", (client_name,))
+
+        client_row = conn.execute(
+            "SELECT id, client_name, ukey FROM clients WHERE client_name = ? COLLATE NOCASE",
+            (client_name,),
+        ).fetchone()
+
+        if rows:
+            conn.execute("DELETE FROM users WHERE client_name = ?", (client_name,))
+
+        client_deleted = 0
+        ukey           = None
+        canonical_name = client_name
+        if client_row:
+            conn.execute("DELETE FROM clients WHERE id = ?", (client_row["id"],))
+            client_deleted = 1
+            ukey           = client_row["ukey"]
+            canonical_name = client_row["client_name"]
 
     deleted = [r["username"] for r in rows]
-    log.info("Users deleted by client: %s count=%d", client_name, len(deleted))
-    return jsonify({"deleted": len(deleted), "usernames": deleted})
+    log.info("Users+client deleted by client: %s users=%d client_row=%d ukey=%s",
+             canonical_name, len(deleted), client_deleted, ukey)
+    return jsonify({
+        "deleted":        len(deleted),
+        "usernames":      deleted,
+        "client_deleted": client_deleted,
+        "ukey":           ukey,
+        "client_name":    canonical_name,
+    })
 
 
 @app.route("/admin/stats", methods=["GET"])
@@ -939,7 +1335,8 @@ def admin_stats():
         total    = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
         active   = conn.execute("SELECT COUNT(*) FROM users WHERE is_active=1").fetchone()[0]
         srvs     = conn.execute("SELECT COUNT(*) FROM server_master").fetchone()[0]
-        clients  = conn.execute("SELECT COUNT(DISTINCT client_name) FROM users").fetchone()[0]
+        clients_count = conn.execute("SELECT COUNT(*) FROM clients").fetchone()[0]
+        clients_dist  = conn.execute("SELECT COUNT(DISTINCT client_name) FROM users").fetchone()[0]
         pending  = conn.execute(
             "SELECT COUNT(*) FROM rdp_download_tokens WHERE used_at IS NULL"
         ).fetchone()[0]
@@ -959,7 +1356,8 @@ def admin_stats():
         "active_users":             active,
         "disabled_users":           total - active,
         "total_servers":            srvs,
-        "distinct_clients":         clients,
+        "total_clients":            clients_count,
+        "distinct_clients":         clients_dist,
         "rdp_tokens_pending":       pending,
         "rdp_tokens_consumed":      consumed,
         "per_server":               [dict(r) for r in per_srv],
