@@ -1,0 +1,34 @@
+# /etc/systemd/system/miracle-router.service
+# Miracle Cloud Gateway — Systemd Service (v2.0 — SQLite + Admin API)
+#
+# Changes from v1:
+#   - Added MIRACLE_API_KEY environment variable
+#   - Added MIRACLE_DB_PATH environment variable
+
+[Unit]
+Description=Miracle Cloud Gateway Router
+After=network.target
+
+[Service]
+Type=simple
+User=miracle
+Group=miracle
+WorkingDirectory=/opt/miracle-router
+
+# --- IMPORTANT: Set your API key here ---
+# Generate a strong key:  python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+Environment="MIRACLE_API_KEY=CHANGE_ME_TO_A_STRONG_SECRET_KEY"
+Environment="MIRACLE_DB_PATH=/etc/miracle-registry/miracle.db"
+
+ExecStart=/opt/miracle-router/venv/bin/gunicorn \
+    --bind 127.0.0.1:5001 \
+    --workers 2 \
+    --timeout 30 \
+    --access-logfile /var/log/miracle-router.log \
+    router:app
+
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

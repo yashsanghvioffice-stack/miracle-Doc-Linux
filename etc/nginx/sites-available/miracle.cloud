@@ -1,0 +1,207 @@
+# /etc/nginx/sites-available/miracle.cloud
+# Miracle Desktop on Cloud - Reverse Proxy + Login Gate (v3.4)
+#
+# Changes from v3.3:
+#   - REMOVED: /cgi-bin/hb.exe Flask intercept block (no longer needed --
+#              hb.exe traffic goes back through the catch-all proxy for
+#              the HTML5 action=cp call)
+#   - REMOVED: /plugin/install block (TSplus RemoteApp plugin obsolete;
+#              new approach uses Windows mstsc.exe natively)
+#   - ADDED:   /rdp/download/<token> proxied to Flask
+#              (generates a single-use .rdp file per authenticated user)
+#
+# Flow:
+#   GET  /                  -> Login page (index.html)
+#   POST /login             -> Flask: SQLite + TSplus auth
+#                              html5  -> {redirect:"/workspace"}
+#                              remote -> {redirect:"/workspace-remote",
+#                                          rdp_url:"/rdp/download/<token>"}
+#   GET  /workspace         -> HTML5 handshake page (workspace.html)
+#   GET  /workspace-remote  -> Spinner + .rdp download trigger page
+#   GET  /rdp/download/*    -> Flask: validate token, return .rdp file
+#   /admin/*                -> Flask admin CRUD (IP allowlist + API key)
+#   /*  (everything else)   -> Cookie-routed TSplus transparent proxy
+
+limit_req_zone $binary_remote_addr zone=login_limit:10m rate=5r/s;
+limit_req_zone $binary_remote_addr zone=admin_limit:10m rate=5r/s;
+limit_req_zone $binary_remote_addr zone=rdp_limit:10m rate=10r/m;
+
+upstream miracle_api {
+    server 127.0.0.1:5001;
+    keepalive 8;
+}
+
+server {
+    listen 80;
+    server_name miracle.cloud www.miracle.cloud;
+    root /var/www/miracle;
+
+    # ---------------------------------------------------------------
+    # 1. LOGIN PAGE
+    # ---------------------------------------------------------------
+    location = / {
+        add_header Cache-Control "no-store, no-cache, must-revalidate" always;
+        add_header Pragma        "no-cache"                            always;
+        try_files /index.html =404;
+    }
+
+    location = /index.html {
+        add_header Cache-Control "no-store, no-cache, must-revalidate" always;
+        add_header Pragma        "no-cache"                            always;
+        try_files /index.html =404;
+    }
+
+    # ---------------------------------------------------------------
+    # 2. LOGIN API  (POST only)
+    # ---------------------------------------------------------------
+    location = /login {
+        limit_req zone=login_limit burst=10 nodelay;
+
+        proxy_pass         http://miracle_api/login;
+        proxy_http_version 1.1;
+        proxy_set_header   Host            localhost;
+        proxy_set_header   X-Real-IP       $remote_addr;
+        proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header   Connection      "";
+        proxy_read_timeout 15s;
+        proxy_send_timeout 5s;
+
+        limit_except POST { deny all; }
+    }
+
+    # ---------------------------------------------------------------
+    # 3. LOGOUT
+    # ---------------------------------------------------------------
+    location = /logout {
+        proxy_pass         http://miracle_api/logout;
+        proxy_http_version 1.1;
+        proxy_set_header   Host            localhost;
+        proxy_set_header   X-Real-IP       $remote_addr;
+        proxy_set_header   Connection      "";
+        proxy_read_timeout 5s;
+    }
+
+    # ---------------------------------------------------------------
+    # 4. HEALTH CHECK
+    # ---------------------------------------------------------------
+    location = /health {
+        proxy_pass       http://miracle_api/health;
+        proxy_set_header Host localhost;
+        limit_except GET { deny all; }
+        access_log off;
+    }
+
+    # ---------------------------------------------------------------
+    # 5. ADMIN API
+    # ---------------------------------------------------------------
+    location /admin/ {
+        allow 127.0.0.1;
+        allow 172.16.25.0/24;
+        deny all;
+
+        limit_req zone=admin_limit burst=10 nodelay;
+
+        proxy_pass         http://miracle_api/admin/;
+        proxy_http_version 1.1;
+        proxy_set_header   Host            localhost;
+        proxy_set_header   X-Real-IP       $remote_addr;
+        proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header   X-API-Key       $http_x_api_key;
+        proxy_set_header   Connection      "";
+
+        client_max_body_size 1m;
+    }
+
+    # ---------------------------------------------------------------
+    # 6a. WORKSPACE (HTML5)
+    # ---------------------------------------------------------------
+    location = /workspace {
+        add_header Cache-Control "no-store, no-cache, must-revalidate" always;
+        try_files /workspace.html =404;
+    }
+
+    # ---------------------------------------------------------------
+    # 6b. WORKSPACE-REMOTE (.rdp download spinner page)
+    # ---------------------------------------------------------------
+    location = /workspace-remote {
+        add_header Cache-Control "no-store, no-cache, must-revalidate" always;
+        try_files /workspace-remote.html =404;
+    }
+
+    # ---------------------------------------------------------------
+    # 6c. RDP DOWNLOAD  (new in v3.4)
+    #     One-time token-based .rdp file delivery. Flask validates the
+    #     token, marks it used, and returns the per-user .rdp content.
+    # ---------------------------------------------------------------
+    location ~ "^/rdp/download/[a-f0-9]{32}$" {
+        limit_req zone=rdp_limit burst=5 nodelay;
+
+        proxy_pass         http://miracle_api;
+        proxy_http_version 1.1;
+        proxy_set_header   Host            localhost;
+        proxy_set_header   X-Real-IP       $remote_addr;
+        proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header   Connection      "";
+        proxy_read_timeout 10s;
+
+        limit_except GET { deny all; }
+    }
+
+    # ---------------------------------------------------------------
+    # 7. SESSION  -- TSplus session entry after JS login completes
+    # ---------------------------------------------------------------
+    location = /session {
+        resolver 8.8.8.8 valid=30s;
+        set $tsplus $cookie_miracle_target;
+        if ($tsplus = '') {
+            return 302 /;
+        }
+        proxy_pass            http://$tsplus/;
+        proxy_http_version    1.1;
+        proxy_set_header      Host              $tsplus;
+        proxy_set_header      Referer           http://$tsplus/;
+        proxy_set_header      Origin            http://$tsplus;
+        proxy_set_header      X-Real-IP         $remote_addr;
+        proxy_set_header      X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header      Cookie            $http_cookie;
+        proxy_cookie_domain   ~172\.16\.25\.\d+  miracle.cloud;
+        proxy_cookie_path     /                  /;
+        proxy_read_timeout    3600s;
+        proxy_send_timeout    3600s;
+        proxy_connect_timeout 10s;
+    }
+
+    # ---------------------------------------------------------------
+    # 8. TSPLUS TRANSPARENT PROXY  (catch-all)
+    #    This handles workspace.html's action=cp call to /cgi-bin/hb.exe
+    #    via the miracle_target cookie. No special-case route needed.
+    # ---------------------------------------------------------------
+    location / {
+        resolver 8.8.8.8 valid=30s;
+
+        set $tsplus $cookie_miracle_target;
+
+        if ($tsplus = '') {
+            return 302 /;
+        }
+
+        proxy_pass            http://$tsplus;
+        proxy_http_version    1.1;
+        proxy_set_header      Host              $tsplus;
+        proxy_set_header      Referer           http://$tsplus/;
+        proxy_set_header      Origin            http://$tsplus;
+        proxy_set_header      X-Real-IP         $remote_addr;
+        proxy_set_header      X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header      Cookie            $http_cookie;
+        proxy_cookie_domain   ~172\.16\.25\.\d+  miracle.cloud;
+        proxy_cookie_path     /                  /;
+        proxy_read_timeout    3600s;
+        proxy_send_timeout    3600s;
+        proxy_connect_timeout 10s;
+        proxy_hide_header     X-Powered-By;
+        proxy_hide_header     Server;
+    }
+
+    access_log /var/log/nginx/miracle.cloud.access.log;
+    error_log  /var/log/nginx/miracle.cloud.error.log warn;
+}

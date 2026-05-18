@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Miracle Cloud -- Opening Your Session</title>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+    rel="stylesheet"
+  />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --primary: #cc0000;
+      --primary-dark: #a30000;
+      --bg: #f5f3ef;
+      --bg-warm: #faf8f5;
+      --white: #ffffff;
+      --text: #1c1917;
+      --text-secondary: #57534e;
+      --muted: #a8a29e;
+      --border: #e7e5e4;
+      --radius: 12px;
+      --radius-lg: 20px;
+    }
+
+    html, body {
+      height: 100%;
+      font-family: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      -webkit-font-smoothing: antialiased;
+    }
+
+    body::before {
+      content: "";
+      position: fixed; top: -30%; right: -15%;
+      width: 600px; height: 600px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(204, 0, 0, 0.06) 0%, transparent 70%);
+      pointer-events: none; z-index: 0;
+    }
+    body::after {
+      content: "";
+      position: fixed; bottom: -20%; left: -10%;
+      width: 500px; height: 500px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(204, 0, 0, 0.04) 0%, transparent 70%);
+      pointer-events: none; z-index: 0;
+    }
+
+    .page {
+      position: relative; z-index: 1;
+      min-height: 100vh;
+      display: flex; align-items: center; justify-content: center;
+      padding: 40px 20px;
+    }
+
+    .card {
+      background: rgba(255, 255, 255, 0.92);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid rgba(255, 255, 255, 0.6);
+      border-radius: var(--radius-lg);
+      box-shadow: 0 24px 64px rgba(0, 0, 0, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.8);
+      padding: 48px 44px 40px;
+      width: 100%; max-width: 480px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .card::before {
+      content: "";
+      position: absolute; top: 0; left: 0; right: 0;
+      height: 4px;
+      background: linear-gradient(90deg, var(--primary-dark), var(--primary), #ff1a1a);
+    }
+
+    .spinner {
+      width: 56px; height: 56px;
+      margin: 0 auto 24px;
+      border: 4px solid #f1ebe5;
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .title {
+      font-size: 22px; font-weight: 700;
+      color: var(--text);
+      text-align: center;
+      margin-bottom: 10px;
+      letter-spacing: -0.3px;
+    }
+
+    .subtitle {
+      font-size: 14px;
+      color: var(--text-secondary);
+      text-align: center;
+      margin-bottom: 30px;
+      line-height: 1.5;
+    }
+
+    .instructions {
+      background: var(--bg-warm);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px 20px;
+      margin-bottom: 24px;
+    }
+
+    .instructions-title {
+      font-size: 12px; font-weight: 700;
+      color: var(--text-secondary);
+      letter-spacing: 0.6px;
+      text-transform: uppercase;
+      margin-bottom: 12px;
+    }
+
+    .step {
+      display: flex; align-items: flex-start;
+      gap: 12px;
+      margin-bottom: 12px;
+      font-size: 13px;
+      color: var(--text);
+      line-height: 1.5;
+    }
+
+    .step:last-child { margin-bottom: 0; }
+
+    .step-num {
+      flex-shrink: 0;
+      width: 22px; height: 22px;
+      border-radius: 50%;
+      background: var(--primary);
+      color: white;
+      font-size: 12px; font-weight: 700;
+      display: flex; align-items: center; justify-content: center;
+    }
+
+    .step-text strong { font-weight: 600; }
+
+    .actions {
+      display: flex; flex-direction: column; gap: 10px;
+      margin-top: 6px;
+    }
+
+    .btn {
+      width: 100%;
+      padding: 13px 18px;
+      border: none;
+      border-radius: var(--radius);
+      font-family: "Inter", sans-serif;
+      font-size: 14px; font-weight: 600;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-flex; align-items: center; justify-content: center;
+      gap: 8px;
+      transition: all 0.2s ease;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+      color: white;
+      box-shadow: 0 4px 14px rgba(204, 0, 0, 0.22);
+    }
+    .btn-primary:hover {
+      background: linear-gradient(135deg, var(--primary-dark), #8b0000);
+      box-shadow: 0 6px 22px rgba(204, 0, 0, 0.32);
+      transform: translateY(-1px);
+    }
+
+    .btn-secondary {
+      background: var(--bg-warm);
+      color: var(--text-secondary);
+      border: 1px solid var(--border);
+    }
+    .btn-secondary:hover {
+      background: var(--white);
+      color: var(--text);
+    }
+
+    .btn svg { width: 16px; height: 16px; }
+
+    .err {
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      color: #b91c1c;
+      padding: 14px 16px;
+      border-radius: var(--radius);
+      font-size: 13px;
+      line-height: 1.5;
+      margin-bottom: 20px;
+      display: none;
+    }
+    .err.visible { display: block; }
+
+    /* Hide the spinner once download has started */
+    .done .spinner { display: none; }
+  </style>
+</head>
+
+<body>
+  <div class="page">
+    <div class="card" id="card">
+      <div class="spinner" id="spinner"></div>
+      <h1 class="title" id="title">Preparing your session</h1>
+      <p class="subtitle" id="subtitle">Your connection file will download automatically.</p>
+
+      <div class="err" id="err"></div>
+
+      <div class="instructions">
+        <div class="instructions-title">Next Steps</div>
+        <div class="step">
+          <div class="step-num">1</div>
+          <div class="step-text">
+            Find the downloaded file <strong>miracle.rdp</strong> in your Downloads folder.
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">2</div>
+          <div class="step-text">
+            Double-click the file. <strong>Remote Desktop Connection</strong> will open.
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">3</div>
+          <div class="step-text">
+            Enter your password when prompted to start your session.
+          </div>
+        </div>
+      </div>
+
+      <div class="actions">
+        <a href="#" class="btn btn-primary" id="downloadAgainBtn" style="display: none;">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="7 10 12 15 17 10"/>
+            <line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+          Download Again
+        </a>
+        <a href="/" class="btn btn-secondary">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M19 12H5"/>
+            <polyline points="12 19 5 12 12 5"/>
+          </svg>
+          Back to Login
+        </a>
+      </div>
+    </div>
+  </div>
+
+<script>
+/* workspace-remote.html v2 (v3.4 flow)
+ *
+ * URL hash format:  #<url-encoded rdp_url>
+ *
+ * On load:
+ *   1. Read the hash, decode it. If missing/malformed, show error.
+ *   2. Clear the hash from the URL.
+ *   3. Trigger the .rdp download by setting window.location to rdp_url.
+ *      Browser will download (because server sets Content-Disposition).
+ *   4. Show the instructions.
+ *
+ * The download token is single-use. Reloading or going back will not work --
+ * the user must re-authenticate to get a new token.
+ */
+(function () {
+  var hash = window.location.hash;
+  var err = document.getElementById("err");
+  var title = document.getElementById("title");
+  var subtitle = document.getElementById("subtitle");
+  var spinner = document.getElementById("spinner");
+  var card = document.getElementById("card");
+
+  function showError(msg, redirect) {
+    spinner.style.display = "none";
+    title.textContent = "Could not start session";
+    subtitle.textContent = "";
+    err.textContent = msg;
+    err.classList.add("visible");
+    if (redirect) {
+      setTimeout(function () { window.location.href = "/"; }, 3500);
+    }
+  }
+
+  if (!hash || hash.length < 2) {
+    showError("Session information is missing. Redirecting you to the login page.", true);
+    return;
+  }
+
+  var rdpUrl;
+  try {
+    rdpUrl = decodeURIComponent(hash.substring(1));
+  } catch (e) {
+    showError("Session information is invalid. Redirecting you to the login page.", true);
+    return;
+  }
+
+  /* Only allow same-origin paths starting with /rdp/download/ */
+  if (!/^\/rdp\/download\/[a-f0-9]{32}$/.test(rdpUrl)) {
+    showError("Session information is invalid. Redirecting you to the login page.", true);
+    return;
+  }
+
+  /* Clear the hash so reloads don't re-attempt the same (already-used) token */
+  history.replaceState(null, "", "/workspace-remote");
+
+  /* Trigger the download. Since the server returns the file with
+   * Content-Disposition: attachment, the browser saves it instead of
+   * navigating. The current page stays on screen. */
+  function triggerDownload() {
+    var a = document.createElement("a");
+    a.href = rdpUrl;
+    a.download = "miracle.rdp";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }
+
+  /* Kick off the download after a brief delay so the page is fully rendered */
+  setTimeout(function () {
+    triggerDownload();
+
+    /* After download starts, swap to "ready" state */
+    setTimeout(function () {
+      card.classList.add("done");
+      title.textContent = "Your session is ready";
+      subtitle.textContent = "We've sent the connection file to your Downloads folder.";
+
+      /* Show "Download Again" button as a fallback. Note: the token is
+       * single-use, so this only works if the first download was blocked
+       * by the browser. After successful use it returns 410 Gone. */
+      var dlBtn = document.getElementById("downloadAgainBtn");
+      dlBtn.href = rdpUrl;
+      dlBtn.style.display = "inline-flex";
+      dlBtn.addEventListener("click", function (e) {
+        /* Let the browser handle the click naturally; no need to prevent
+         * default. If the token is already used, server returns 410. */
+      });
+    }, 800);
+  }, 250);
+})();
+</script>
+</body>
+</html>

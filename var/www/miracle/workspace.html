@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Connecting to workspace...</title>
+  <style>
+    body { margin:0; background:#1a1a1a; display:flex; align-items:center;
+           justify-content:center; height:100vh; font-family:sans-serif; }
+    .box { text-align:center; color:#ccc; }
+    .spinner { width:42px; height:42px; border:3px solid #333;
+               border-top-color:#CC0000; border-radius:50%;
+               animation:spin .7s linear infinite; margin:0 auto 16px; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+    p { font-size:14px; color:#888; margin:0; }
+  </style>
+</head>
+<body>
+<div class="box">
+  <div class="spinner"></div>
+  <p>Connecting to your workspace...</p>
+</div>
+<script>
+// TSplus base64 encoder -- identical to TSplus common.js jsencode64
+var jsb64array = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=";
+function jsencode64(input) {
+    var base64 = "", chr1, chr2, chr3, enc1, enc2, enc3, enc4, i = 0;
+    do {
+        chr1 = input.charCodeAt(i++);
+        chr2 = input.charCodeAt(i++);
+        chr3 = input.charCodeAt(i++);
+        enc1 = chr1 >> 2;
+        enc2 = ((chr1 & 3) << 4) | (chr2 >> 4);
+        enc3 = ((chr2 & 15) << 2) | (chr3 >> 6);
+        enc4 = chr3 & 63;
+        if (isNaN(chr2)) { enc3 = enc4 = 64; }
+        else if (isNaN(chr3)) { enc4 = 64; }
+        base64 += jsb64array.charAt(enc1) + jsb64array.charAt(enc2) +
+                  jsb64array.charAt(enc3) + jsb64array.charAt(enc4);
+        chr1 = chr2 = chr3 = enc1 = enc2 = enc3 = enc4 = "";
+    } while (i < input.length);
+    return base64;
+}
+
+(function() {
+    // Read credentials from URL hash
+    var h = window.location.hash;
+    if (!h || h.length < 2) { window.location.href = '/'; return; }
+
+    var decoded;
+    try { decoded = atob(h.substring(1)); } catch(e) { window.location.href = '/'; return; }
+
+    var idx = decoded.indexOf(':');
+    if (idx < 0) { window.location.href = '/'; return; }
+
+    var username = decoded.substring(0, idx);
+    var password = decoded.substring(idx + 1);
+
+    // Clear hash immediately -- credentials never stay in URL or browser history
+    history.replaceState(null, '', '/workspace');
+
+    // Step 1: Authenticate with TSplus backend via proxy
+    // Cookies already set by Flask /login are sent automatically (credentials: include)
+    var timestamp = Date.now().toString();
+    var payload = 'action=cp&l=' + encodeURIComponent(username.toLowerCase()) +
+                  '&p=' + encodeURIComponent(password) +
+                  '&d=&f=&t=' + timestamp;
+
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '/cgi-bin/hb.exe', true);
+    xhr.setRequestHeader('Content-Type', 'text/plain;charset=UTF-8');
+    xhr.withCredentials = true;
+
+    xhr.onreadystatechange = function() {
+        if (xhr.readyState !== 4) return;
+
+        var tsStatus = '';
+        try {
+            var resp = JSON.parse(xhr.responseText);
+            tsStatus = (resp.Status || '').toLowerCase();
+        } catch(e) {}
+
+        if (tsStatus === 'ok' || tsStatus.indexOf('ok') === 0) {
+            // Step 2: Build TSplus window.name credential string
+            // This is exactly what TSplus's forHTML5() produces.
+            // TSplus's html5.html reads window.name via eval() to get credentials.
+            var randm = Math.floor(Math.random() * 1000);
+            // Escape backslashes in password (TSplus escapeBackslash function)
+            var safePass = password.indexOf('\\') === -1 ? password :
+                           password.split('\\').join('\\\\');
+
+            var evalStr =
+                'var randomnum = ' + randm + ';' +
+                'window.cmdline=\'\';' +
+                'window.user=\'' + username + '\';' +
+                'window.pass=\'' + safePass + '\';' +
+                'window.server=\'127.0.0.1\';' +
+                'window.port=\'3389\';' +
+                'window.webport=\'3389\';' +
+                'window.lang=\'as_browser\';' +
+                'window.domain=\'\';' +
+                'applications_portal_return_url=\'' + window.location.origin + '/workspace\';';
+
+            // TSplus uses jsencode64(escape(str)).replace(/=/g,'_')
+            var encoded = jsencode64(escape(evalStr)).replace(/=/g, '_');
+
+            // Step 3: Set window.name (TSplus html5.html reads this on load)
+            window.name = ' ' + encoded;
+
+            // Step 4: Navigate to TSplus HTML5 client -- proxied through Nginx
+            window.location.href = '/software/html5.html';
+
+        } else {
+            // Auth failed -- back to login
+            window.location.href = '/';
+        }
+    };
+
+    xhr.onerror = function() { window.location.href = '/'; };
+    xhr.send(payload);
+})();
+</script>
+</body>
+</html>
