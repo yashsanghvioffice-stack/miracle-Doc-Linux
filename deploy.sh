@@ -50,7 +50,7 @@ cd $REPO_DIR
 git fetch origin
 
 LOCAL=$(git rev-parse HEAD)
-REMOTE=$(git rev-parse origin/main)
+REMOTE=$(git rev-parse origin/master)
 
 if [ "$LOCAL" = "$REMOTE" ]; then
   log "⚠️  No new changes found. Nothing to deploy."
@@ -62,7 +62,7 @@ CHANGED_FILES=$(git diff --name-only HEAD origin/master)
 log "Changed files detected:"
 for f in $CHANGED_FILES; do log "  → $f"; done
 
-git pull origin main
+git pull origin master
 log "✅ Git pull successful | Commit: $(git rev-parse --short HEAD)"
 
 # ─── STEP 2: BACKUP ───────────────────────
