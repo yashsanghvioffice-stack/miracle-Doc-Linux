@@ -1,4 +1,3 @@
-```bash
 #!/bin/bash
 # ══════════════════════════════════════════════════════════════
 #  MIRACLE CLOUD GATEWAY -- API Key Rotation
@@ -238,4 +237,3 @@ echo "   sudo cp $BACKUP_FILE $SERVICE_FILE"
 echo "   sudo systemctl daemon-reload && sudo systemctl restart miracle-router"
 echo ""
 echo "═══════════════════════════════════════════════════════════════"
-```

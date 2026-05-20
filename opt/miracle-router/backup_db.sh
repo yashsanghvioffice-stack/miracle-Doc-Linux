@@ -1,4 +1,3 @@
-```bash
 #!/bin/bash
 # ══════════════════════════════════════════════════════════════
 #  MIRACLE CLOUD GATEWAY -- SQLite Backup Script
@@ -226,4 +225,3 @@
 #  
 #  log "✅ Backup complete: $FINAL_BACKUP"
 #  log "══════════════════════════════════════════"
-#  ```
