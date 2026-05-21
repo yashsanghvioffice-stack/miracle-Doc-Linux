@@ -27,6 +27,7 @@
 #  Rollback does NOT cover: schema migrations, manual hot-fixes.
 # ══════════════════════════════════════════════════════════════
 
+
 set -eo pipefail
 
 # ─── CONFIG ─────────────────────────────────────────────────────

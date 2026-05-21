@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(ls \"C:/Users/yash.s/.claude/projects/c--miracle-backup/memory/\")",
-      "Read(//c/Users/yash.s/.claude/projects/c--miracle-backup/memory/**)"
+      "Read(//c/Users/yash.s/.claude/projects/c--miracle-backup/memory/**)",
+      "Bash(git rev-list *)"
     ]
   }
 }

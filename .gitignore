@@ -34,6 +34,4 @@ Thumbs.db
 # Project specific generated/temp files
 .helm-diag/
 
-deploy.sh
-
 *.md
