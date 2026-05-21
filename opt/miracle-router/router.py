@@ -906,10 +906,26 @@ def client_create():
 def client_list():
     with db() as conn:
         rows = conn.execute("""
-            SELECT c.*,
+            SELECT c.id,
+                   c.client_name,
+                   c.ukey,
+                   c.created_at,
                    (SELECT COUNT(*) FROM users u
-                      WHERE u.client_name = c.client_name COLLATE NOCASE) AS user_count
+                      WHERE u.client_name = c.client_name COLLATE NOCASE) AS user_count,
+                   u.username,
+                   u.email,
+                   u.mobile,
+                   u.is_active,
+                   u.server_id,
+                   u.updated_at,
+                   s.server_name,
+                   s.server_ip
             FROM   clients c
+            LEFT JOIN users u ON u.id = (
+                SELECT MIN(u2.id) FROM users u2
+                WHERE u2.client_name = c.client_name COLLATE NOCASE
+            )
+            LEFT JOIN server_master s ON s.id = u.server_id
             ORDER  BY c.client_name
         """).fetchall()
     return jsonify({"clients": [dict(r) for r in rows], "count": len(rows)})
@@ -1092,9 +1108,11 @@ def client_delete(client_id):
 USER_SELECT = """
     SELECT u.id, u.username, u.client_name, u.email, u.mobile,
            u.server_id, u.is_active, u.created_at, u.updated_at,
-           s.server_name, s.server_ip
+           s.server_name, s.server_ip,
+           c.ukey
     FROM   users u
     JOIN   server_master s ON s.id = u.server_id
+    LEFT JOIN clients c ON c.client_name = u.client_name COLLATE NOCASE
 """
 
 

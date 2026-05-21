@@ -16,9 +16,11 @@
 #    4. Restrict deploys to allowed dir prefixes (etc/, opt/, var/)
 #    5. Backup existing files + track new files (manifest)
 #    6. Copy files
-#    7. nginx -t before reload; rollback on failure
-#    8. Restart miracle-router; verify /health endpoint actually responds
-#    9. Prune old backups (keep last 20)
+#    7. Normalize permissions (fix-permissions.sh --quiet) so new files
+#       land with correct owner/mode before the service touches them
+#    8. nginx -t before reload; rollback on failure
+#    9. Restart miracle-router; verify /health endpoint actually responds
+#   10. Prune old backups (keep last 20)
 #
 #  Rollback covers: modified files (restored from .bak),
 #                   new files (deleted).
@@ -150,7 +152,7 @@ log "Deployment Started (dry_run=$DRY_RUN, assume_yes=$ASSUME_YES)"
 log "═══════════════════════════════════════════════════════"
 
 # ─── STEP 1: GIT FETCH + DIFF ───────────────────────────────────
-log "[1/7] Checking for changes..."
+log "[1/8] Checking for changes..."
 cd "$REPO_DIR"
 
 # Detect the upstream branch (don't assume master vs main)
@@ -180,7 +182,7 @@ log "  Changed files (${UPSTREAM_BRANCH}):"
 echo "$CHANGED_FILES" | while read -r f; do log "    → $f"; done
 
 # ─── STEP 2: SAFETY GATES ───────────────────────────────────────
-log "[2/7] Safety checks..."
+log "[2/8] Safety checks..."
 
 # Halt if any migration files are in the changeset
 MIGRATION_FILES=$(echo "$CHANGED_FILES" | grep -E "$MIGRATION_PATTERN" || true)
@@ -247,13 +249,13 @@ fi
 if $DRY_RUN; then
     log "[DRY-RUN] would: git pull --ff-only origin $UPSTREAM_BRANCH"
 else
-    log "[3/7] Pulling from git..."
+    log "[3/8] Pulling from git..."
     git pull --ff-only origin "$UPSTREAM_BRANCH"
     log "  Now at: $(git rev-parse --short HEAD)"
 fi
 
 # ─── STEP 4: BACKUP + DEPLOY ────────────────────────────────────
-log "[4/7] Backup + deploy..."
+log "[4/8] Backup + deploy..."
 mkdir -p "$BACKUP_DIR"
 MANIFEST="$BACKUP_DIR/manifest.txt"
 NEWFILES_LIST="$BACKUP_DIR/new_files.list"
@@ -307,8 +309,27 @@ if $DRY_RUN; then
     exit 0
 fi
 
-# ─── STEP 5: NGINX VALIDATE + RELOAD ────────────────────────────
-log "[5/7] Validating nginx config..."
+# ─── STEP 5: NORMALIZE PERMISSIONS ──────────────────────────────
+# Newly-copied files inherit deploy's umask (root:root 644). Run the
+# permission normalizer to set the right owner/mode before nginx and
+# the router try to use them. Idempotent; safe if nothing drifted.
+# We invoke via `bash <path>` so a missing +x on the freshly-copied
+# script doesn't block us bootstrapping it for the first time.
+log "[5/8] Normalizing permissions..."
+FIXPERMS="$REPO_DIR/opt/miracle-router/fix-permissions.sh"
+if [ -f "$FIXPERMS" ]; then
+    if bash "$FIXPERMS" --quiet; then
+        log "  ✓ permissions normalized"
+    else
+        log "  ✗ fix-permissions.sh failed -- triggering rollback"
+        false  # trip the ERR trap
+    fi
+else
+    log "  ⊘ $FIXPERMS not found, skipping (legacy install?)"
+fi
+
+# ─── STEP 6: NGINX VALIDATE + RELOAD ────────────────────────────
+log "[6/8] Validating nginx config..."
 if nginx -t 2>>"$LOG_FILE"; then
     log "  ✓ nginx config valid"
     systemctl reload nginx
@@ -318,13 +339,13 @@ else
     false  # trip the ERR trap
 fi
 
-# ─── STEP 6: RESTART ROUTER ─────────────────────────────────────
-log "[6/7] Restarting miracle-router..."
+# ─── STEP 7: RESTART ROUTER ─────────────────────────────────────
+log "[7/8] Restarting miracle-router..."
 systemctl daemon-reload
 systemctl restart miracle-router
 
-# ─── STEP 7: HEALTH CHECK ───────────────────────────────────────
-log "[7/7] Health check..."
+# ─── STEP 8: HEALTH CHECK ───────────────────────────────────────
+log "[8/8] Health check..."
 
 # Wait up to 15 seconds for the service to come up
 HEALTH_OK=false
