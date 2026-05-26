@@ -3,7 +3,22 @@
     "allow": [
       "Bash(ls \"C:/Users/yash.s/.claude/projects/c--miracle-backup/memory/\")",
       "Read(//c/Users/yash.s/.claude/projects/c--miracle-backup/memory/**)",
-      "Bash(git rev-list *)"
+      "Bash(git rev-list *)",
+      "Bash(mkdir -p opt/miracle-scripts)",
+      "Bash(git mv *)",
+      "Bash(python -c ' *)",
+      "Bash(python3 -m py_compile init_db.py request_logging.py dal/request_log_dal.py dal/connection.py config.py messages.py router.py)",
+      "Bash(py --version)",
+      "Bash(py -3 --version)",
+      "Bash(py -3 -m py_compile init_db.py request_logging.py dal/request_log_dal.py dal/connection.py config.py messages.py router.py)",
+      "Bash(rm -f /tmp/miracle-test.db /tmp/miracle-test.db-wal /tmp/miracle-test.db-shm 2>&1; echo done)",
+      "Bash(py -3 -c \"import flask; print\\('flask', flask.__version__\\)\")",
+      "Bash(py -3 -c \"import requests; print\\('requests', requests.__version__\\)\")",
+      "Bash(py -3 tmp/self_test.py)",
+      "Bash(py -3 -c ' *)"
+    ],
+    "additionalDirectories": [
+      "c:\\tmp"
     ]
   }
 }

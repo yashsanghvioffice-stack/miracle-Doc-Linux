@@ -1,34 +1,35 @@
 #!/usr/bin/env python3
 """
-Miracle Cloud Gateway -- DB Bootstrap
+Miracle Cloud Gateway -- DB Bootstrap & Schema Sync
 
-Initialize ALL required tables in one shot. Idempotent: safe to run
-on a fresh VM OR an existing DB. Tables that already exist are left
-alone; missing tables are created.
+ONE idempotent script for both fresh installs and existing DBs:
+
+    * Tables missing  -> CREATE TABLE IF NOT EXISTS
+    * Columns missing -> ALTER TABLE ADD COLUMN
+    * Indexes missing -> CREATE INDEX IF NOT EXISTS
+
+Safe to run on every deploy. Does NOT drop or rename anything, never
+touches existing rows, never re-runs CREATE on a present table.
 
 Run on the gateway VM as root:
-    sudo python3 /opt/miracle-router/init_all_db.py
-
-What it creates (if missing):
-    server_master         -- TSplus server registry
-    users                 -- per-user accounts (email, mobile, is_active, server_id)
-    rdp_download_tokens   -- single-use .rdp file download tokens
-    clients               -- uKey table (one row per tenant)
-
-What it does NOT do:
-    - Drop or alter existing tables (this is safe-by-default)
-    - Insert any seed data
-    - Touch existing rows
-
-If you need a destructive reset, do it manually:
-    sudo systemctl stop miracle-router
-    sudo rm /etc/miracle-registry/miracle.db
-    sudo python3 /opt/miracle-router/init_all_db.py
-    sudo systemctl start miracle-router
+    sudo python3 /opt/miracle-router/init_db.py
 
 Flags:
-    --dry-run     Report what would change without writing
-    --verify      Just check current schema, don't modify anything
+    --dry-run     Report what would change, write nothing
+    --verify      Read-only check; non-zero exit if drift found
+    --help        Show this message
+
+Adding a column later:
+    1. Edit SCHEMA below: add the column to `create` (for fresh installs)
+       AND to `add_columns` (so it's also applied on existing DBs).
+    2. Run this script on each deployed gateway.
+
+SQLite ALTER TABLE ADD COLUMN restrictions (apply to `add_columns`):
+    * No PRIMARY KEY, no UNIQUE.
+    * No NOT NULL without an explicit DEFAULT.
+    * Default cannot be CURRENT_TIMESTAMP / CURRENT_TIME / CURRENT_DATE.
+If a future column hits these limits, you must write a one-off
+ALTER+UPDATE block manually -- this script will not silently break.
 """
 
 import os
@@ -38,83 +39,136 @@ import sys
 DB_PATH = os.environ.get("MIRACLE_DB_PATH", "/etc/miracle-registry/miracle.db")
 DB_DIR  = os.path.dirname(DB_PATH)
 
-# ─── SCHEMA DEFINITIONS ─────────────────────────────────────────
-# Each entry: (table_name, CREATE statement, [extra index/trigger statements])
-# All CREATE statements use IF NOT EXISTS so re-running is safe.
+
+# ─── SCHEMA ─────────────────────────────────────────────────────
+# Each entry is a dict with:
+#   table        - SQL identifier
+#   create       - full CREATE TABLE (used on fresh installs)
+#   add_columns  - {col_name: ALTER-safe definition} -- applied if column
+#                  is missing on an existing table. Omit columns that
+#                  cannot be safely ADDed (PRIMARY KEY, UNIQUE, etc.).
+#   indexes      - list of CREATE INDEX IF NOT EXISTS statements
 
 SCHEMA = [
-    (
-        "server_master",
-        """
-        CREATE TABLE IF NOT EXISTS server_master (
-            id           INTEGER PRIMARY KEY AUTOINCREMENT,
-            server_name  TEXT    NOT NULL UNIQUE COLLATE NOCASE,
-            server_ip    TEXT    NOT NULL UNIQUE,
-            created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at   TIMESTAMP
-        )
+    {
+        "table": "server_master",
+        "create": """
+            CREATE TABLE IF NOT EXISTS server_master (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                server_name  TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+                server_ip    TEXT    NOT NULL UNIQUE,
+                created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at   TIMESTAMP
+            )
         """,
-        [],
-    ),
-    (
-        "users",
-        """
-        CREATE TABLE IF NOT EXISTS users (
-            id           INTEGER PRIMARY KEY AUTOINCREMENT,
-            username     TEXT    NOT NULL UNIQUE COLLATE NOCASE,
-            client_name  TEXT    NOT NULL,
-            email        TEXT    NOT NULL,
-            mobile       TEXT    NOT NULL,
-            server_id    INTEGER NOT NULL,
-            is_active    INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0,1)),
-            created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at   TIMESTAMP,
-            FOREIGN KEY (server_id) REFERENCES server_master(id)
-        )
+        "add_columns": {
+            "updated_at": "TIMESTAMP",
+        },
+        "indexes": [],
+    },
+    {
+        "table": "users",
+        "create": """
+            CREATE TABLE IF NOT EXISTS users (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                username     TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+                client_name  TEXT    NOT NULL,
+                email        TEXT    NOT NULL,
+                mobile       TEXT    NOT NULL,
+                server_id    INTEGER NOT NULL,
+                is_active    INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0,1)),
+                created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at   TIMESTAMP,
+                FOREIGN KEY (server_id) REFERENCES server_master(id)
+            )
         """,
-        [
+        "add_columns": {
+            "email":      "TEXT NOT NULL DEFAULT ''",
+            "mobile":     "TEXT NOT NULL DEFAULT ''",
+            "is_active":  "INTEGER NOT NULL DEFAULT 1",
+            "updated_at": "TIMESTAMP",
+        },
+        "indexes": [
             "CREATE INDEX IF NOT EXISTS idx_users_client_name ON users(client_name COLLATE NOCASE)",
             "CREATE INDEX IF NOT EXISTS idx_users_server_id   ON users(server_id)",
             "CREATE INDEX IF NOT EXISTS idx_users_is_active   ON users(is_active)",
         ],
-    ),
-    (
-        "rdp_download_tokens",
-        """
-        CREATE TABLE IF NOT EXISTS rdp_download_tokens (
-            token        TEXT    PRIMARY KEY,
-            username     TEXT    NOT NULL,
-            server_ip    TEXT    NOT NULL,
-            created_at   TIMESTAMP NOT NULL,
-            used_at      TIMESTAMP
-        )
+    },
+    {
+        "table": "rdp_download_tokens",
+        "create": """
+            CREATE TABLE IF NOT EXISTS rdp_download_tokens (
+                token        TEXT    PRIMARY KEY,
+                username     TEXT    NOT NULL,
+                server_ip    TEXT    NOT NULL,
+                created_at   TIMESTAMP NOT NULL,
+                used_at      TIMESTAMP
+            )
         """,
-        [
+        "add_columns": {
+            "used_at": "TIMESTAMP",
+        },
+        "indexes": [
             "CREATE INDEX IF NOT EXISTS idx_rdp_tokens_created ON rdp_download_tokens(created_at)",
             "CREATE INDEX IF NOT EXISTS idx_rdp_tokens_used    ON rdp_download_tokens(used_at)",
         ],
-    ),
-    (
-        "clients",
-        """
-        CREATE TABLE IF NOT EXISTS clients (
-            id           INTEGER PRIMARY KEY AUTOINCREMENT,
-            client_name  TEXT    NOT NULL UNIQUE COLLATE NOCASE,
-            ukey         TEXT    NOT NULL UNIQUE COLLATE NOCASE,
-            created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            CHECK(length(ukey) = 8)
-        )
+    },
+    {
+        "table": "clients",
+        "create": """
+            CREATE TABLE IF NOT EXISTS clients (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_name  TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+                ukey         TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+                created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                CHECK(length(ukey) = 8)
+            )
         """,
-        [
+        "add_columns": {},
+        "indexes": [
             "CREATE INDEX IF NOT EXISTS idx_clients_ukey ON clients(ukey COLLATE NOCASE)",
         ],
-    ),
+    },
+    {
+        "table": "request_log",
+        "create": """
+            CREATE TABLE IF NOT EXISTS request_log (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts            TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                method        TEXT NOT NULL,
+                path          TEXT NOT NULL,
+                status        INTEGER,
+                duration_ms   INTEGER,
+                client_ip     TEXT,
+                username      TEXT,
+                ukey          TEXT,
+                error_code    TEXT,
+                exception     TEXT
+            )
+        """,
+        "add_columns": {
+            "method":      "TEXT NOT NULL DEFAULT ''",
+            "path":        "TEXT NOT NULL DEFAULT ''",
+            "status":      "INTEGER",
+            "duration_ms": "INTEGER",
+            "client_ip":   "TEXT",
+            "username":    "TEXT",
+            "ukey":        "TEXT",
+            "error_code":  "TEXT",
+            "exception":   "TEXT",
+        },
+        "indexes": [
+            "CREATE INDEX IF NOT EXISTS idx_request_log_ts       ON request_log(ts)",
+            "CREATE INDEX IF NOT EXISTS idx_request_log_username ON request_log(username)",
+            "CREATE INDEX IF NOT EXISTS idx_request_log_status   ON request_log(status)",
+        ],
+    },
 ]
 
 
 # ─── HELPERS ────────────────────────────────────────────────────
 
-def list_existing_tables(conn):
+def list_tables(conn):
     return {
         r[0] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'"
@@ -122,12 +176,18 @@ def list_existing_tables(conn):
     }
 
 
-def list_existing_indexes(conn):
+def list_indexes(conn):
     return {
         r[0] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%'"
         ).fetchall()
     }
+
+
+def list_columns(conn, table):
+    """Return set of column names currently on `table`."""
+    rows = conn.execute("PRAGMA table_info(%s)" % table).fetchall()
+    return {r[1] for r in rows}
 
 
 def row_count(conn, table):
@@ -137,10 +197,18 @@ def row_count(conn, table):
         return "?"
 
 
+def index_name(stmt):
+    """Pull the index name out of a 'CREATE INDEX IF NOT EXISTS <name> ...' string."""
+    parts = stmt.split()
+    try:
+        return parts[parts.index("EXISTS") + 1]
+    except (ValueError, IndexError):
+        return "(unknown)"
+
+
 # ─── MAIN ───────────────────────────────────────────────────────
 
 def main():
-    # Parse flags
     dry_run = "--dry-run" in sys.argv
     verify  = "--verify"  in sys.argv
 
@@ -148,12 +216,10 @@ def main():
         print(__doc__)
         sys.exit(0)
 
-    # Must be root
     if os.geteuid() != 0:
         sys.stderr.write("ERROR: must run as root (sudo).\n")
         sys.exit(1)
 
-    # Create directory if missing
     if not os.path.exists(DB_DIR):
         if dry_run or verify:
             print("WOULD CREATE: %s" % DB_DIR)
@@ -169,77 +235,106 @@ def main():
 
     print("=" * 60)
     if verify:
-        print(" Miracle DB Bootstrap -- VERIFY mode (read-only)")
+        print(" Miracle DB -- VERIFY (read-only)")
     elif dry_run:
-        print(" Miracle DB Bootstrap -- DRY RUN (no changes)")
+        print(" Miracle DB -- DRY RUN (no changes)")
     else:
-        print(" Miracle DB Bootstrap")
+        print(" Miracle DB -- bootstrap / sync")
     print("=" * 60)
     print("  DB path : %s" % DB_PATH)
-    print("  Fresh   : %s" % ("yes -- new DB will be created" if fresh_db else "no -- existing DB"))
+    print("  Fresh   : %s" % ("yes" if fresh_db else "no -- syncing schema"))
     print()
+
+    drift = False  # used by --verify to set non-zero exit
 
     conn = sqlite3.connect(DB_PATH)
     try:
-        # Always apply pragmas (cheap, idempotent)
         if not (dry_run or verify):
             conn.execute("PRAGMA journal_mode = WAL")
             conn.execute("PRAGMA foreign_keys = ON")
 
-        existing_tables  = list_existing_tables(conn)
-        existing_indexes = list_existing_indexes(conn)
+        existing_tables  = list_tables(conn)
+        existing_indexes = list_indexes(conn)
 
-        # ── Apply schema ──
-        for table_name, create_stmt, extras in SCHEMA:
-            if table_name in existing_tables:
-                cnt = row_count(conn, table_name) if not dry_run else row_count(conn, table_name)
-                print("  [SKIP] %-22s already exists (%s rows)" % (table_name, cnt))
-            else:
+        for entry in SCHEMA:
+            table  = entry["table"]
+            create = entry["create"]
+            addcols = entry.get("add_columns", {})
+            indexes = entry.get("indexes", [])
+
+            # ── Table ──
+            table_preexisted = table in existing_tables
+            if not table_preexisted:
+                drift = True
                 if verify:
-                    print("  [MISSING] %s" % table_name)
+                    print("  [MISSING TABLE] %s" % table)
                 elif dry_run:
-                    print("  [WOULD CREATE] %s" % table_name)
+                    print("  [WOULD CREATE] %s" % table)
                 else:
-                    conn.execute(create_stmt)
-                    print("  [CREATED] %s" % table_name)
+                    conn.execute(create)
+                    print("  [CREATED] %s" % table)
+            else:
+                cnt = row_count(conn, table)
+                print("  [OK] %-22s exists (%s rows)" % (table, cnt))
 
-            # Indexes for this table
-            for idx_stmt in extras:
-                # Parse the index name from "CREATE INDEX IF NOT EXISTS <name> ON ..."
-                parts = idx_stmt.split()
-                try:
-                    idx_name = parts[parts.index("EXISTS") + 1]
-                except (ValueError, IndexError):
-                    idx_name = "(unknown)"
-
-                if idx_name in existing_indexes:
-                    print("         · index %s already present" % idx_name)
+            # ── Columns (ALTER TABLE ADD COLUMN for missing) ──
+            # Only meaningful for tables that pre-existed: a freshly-created
+            # table already has every column from `create`.
+            current_cols = list_columns(conn, table) if table_preexisted or not (dry_run or verify) else set()
+            for col_name, col_def in addcols.items():
+                if not table_preexisted:
+                    continue  # nothing to ALTER on a brand-new table
+                if col_name in current_cols:
+                    continue
+                drift = True
+                stmt = "ALTER TABLE %s ADD COLUMN %s %s" % (table, col_name, col_def)
+                if verify:
+                    print("         · [MISSING COLUMN] %s.%s" % (table, col_name))
+                elif dry_run:
+                    print("         · [WOULD ADD COLUMN] %s.%s %s" % (table, col_name, col_def))
                 else:
-                    if verify:
-                        print("         · [MISSING INDEX] %s" % idx_name)
-                    elif dry_run:
-                        print("         · [WOULD CREATE INDEX] %s" % idx_name)
-                    else:
-                        conn.execute(idx_stmt)
-                        print("         · created index %s" % idx_name)
+                    try:
+                        conn.execute(stmt)
+                        print("         · added column %s.%s" % (table, col_name))
+                    except sqlite3.Error as e:
+                        sys.stderr.write(
+                            "         · FAILED to add %s.%s: %s\n"
+                            "           Stmt: %s\n"
+                            % (table, col_name, e, stmt)
+                        )
+                        raise
+
+            # ── Indexes ──
+            for idx_stmt in indexes:
+                idx_n = index_name(idx_stmt)
+                if idx_n in existing_indexes:
+                    continue
+                drift = True
+                if verify:
+                    print("         · [MISSING INDEX] %s" % idx_n)
+                elif dry_run:
+                    print("         · [WOULD CREATE INDEX] %s" % idx_n)
+                else:
+                    conn.execute(idx_stmt)
+                    print("         · created index %s" % idx_n)
 
         if not (dry_run or verify):
             conn.commit()
 
-        # ── Final report ──
+        # ── Final summary ──
         print()
         print("Final state:")
-        final_tables  = list_existing_tables(conn)
-        for table_name, _, _ in SCHEMA:
-            present = table_name in final_tables
-            cnt     = row_count(conn, table_name) if present else "—"
-            status  = "✓" if present else "✗ MISSING"
-            print("  %-22s %s  (%s rows)" % (table_name, status, cnt))
+        final_tables = list_tables(conn)
+        for entry in SCHEMA:
+            t = entry["table"]
+            present = t in final_tables
+            cnt = row_count(conn, t) if present else "—"
+            mark = "OK" if present else "MISSING"
+            print("  %-22s %-8s (%s rows)" % (t, mark, cnt))
 
     finally:
         conn.close()
 
-    # Lock down DB file permissions (unless dry-run/verify)
     if not (dry_run or verify) and os.path.exists(DB_PATH):
         try:
             os.chmod(DB_PATH, 0o640)
@@ -249,16 +344,20 @@ def main():
     print()
     print("=" * 60)
     if verify:
-        print(" Verify complete -- no changes made")
+        if drift:
+            print(" Verify: DRIFT DETECTED (see [MISSING ...] above)")
+            sys.exit(2)
+        print(" Verify: schema matches")
     elif dry_run:
         print(" Dry run complete -- no changes made")
     else:
-        print(" Bootstrap complete")
-        print()
-        print(" Next: chown to the service user, then restart router")
-        print("   sudo chown miracle:miracle %s" % DB_PATH)
-        print("   sudo systemctl restart miracle-router")
-        print("   curl -s http://127.0.0.1:5001/health")
+        print(" Bootstrap / sync complete")
+        if fresh_db:
+            print()
+            print(" Next:")
+            print("   sudo chown miracle:miracle %s" % DB_PATH)
+            print("   sudo systemctl restart miracle-router")
+            print("   curl -s http://127.0.0.1:5001/health")
     print("=" * 60)
 
 

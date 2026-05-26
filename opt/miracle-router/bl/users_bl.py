@@ -1,0 +1,132 @@
+"""
+BL: users resource rules.
+
+Two responsibilities here:
+
+1. validate_user_payload  -- field-level validation for create / update.
+                             Returns (errors, cleaned). Identical
+                             semantics to the inline version that lived
+                             in router.py pre-Phase-5.
+
+2. delete_by_client_cascade -- atomic cascade for the
+                               DELETE /admin/users/by-client/<name>
+                               flow. Lists matching users, deletes them,
+                               also deletes the matching clients row,
+                               and returns enough info for the
+                               controller to log + JSON-respond.
+
+Cross-resource FK existence checks (server_id_exists, client_name_exists)
+stay as DAL helpers -- they're pure lookups, no rules to add on top.
+"""
+
+from config import (
+    USERNAME_RE, EMAIL_RE, MOBILE_RE,
+)
+from dal import users_dal, clients_dal
+
+
+# =================================================================
+#  VALIDATION
+# =================================================================
+
+def validate_user_payload(data, partial=False):
+    """Validate inputs for user create / update.
+
+    Returns (errors_list, cleaned_dict). When `partial=True` (PUT),
+    missing required fields are tolerated; otherwise they each
+    contribute an error.
+    """
+    errors = []
+    cleaned = {}
+
+    required = ("username", "client_name", "email", "mobile", "server_id")
+    for f in required:
+        if f in data and data[f] is not None and str(data[f]).strip() != "":
+            cleaned[f] = data[f]
+        elif not partial:
+            errors.append("Missing required field: " + f)
+
+    if "username" in cleaned:
+        u = str(cleaned["username"]).strip()
+        if not USERNAME_RE.match(u):
+            errors.append("username must be 1-64 chars (A-Z, a-z, 0-9, _)")
+        cleaned["username"] = u
+
+    if "client_name" in cleaned:
+        c = str(cleaned["client_name"]).strip()
+        if not c or len(c) > 128:
+            errors.append("client_name must be 1-128 chars")
+        cleaned["client_name"] = c
+
+    if "email" in cleaned:
+        e = str(cleaned["email"]).strip().lower()
+        if not EMAIL_RE.match(e) or len(e) > 254:
+            errors.append("email format invalid")
+        cleaned["email"] = e
+
+    if "mobile" in cleaned:
+        m = str(cleaned["mobile"]).strip().replace(" ", "").replace("-", "")
+        if not MOBILE_RE.match(m):
+            errors.append("mobile must be 7-15 digits, optional + prefix")
+        cleaned["mobile"] = m
+
+    if "server_id" in cleaned:
+        try:
+            cleaned["server_id"] = int(cleaned["server_id"])
+        except (TypeError, ValueError):
+            errors.append("server_id must be an integer")
+
+    if "is_active" in data:
+        v = data["is_active"]
+        if isinstance(v, bool):
+            cleaned["is_active"] = 1 if v else 0
+        elif v in (0, 1, "0", "1"):
+            cleaned["is_active"] = int(v)
+        else:
+            errors.append("is_active must be 0 or 1")
+
+    return errors, cleaned
+
+
+# =================================================================
+#  WORKFLOWS
+# =================================================================
+
+def delete_by_client_cascade(conn, client_name):
+    """Delete every user with this client_name AND the matching clients
+    row (which holds the uKey). Single atomic transaction.
+
+    The controller (and v3.4 contract) always responds 200, even when
+    nothing existed -- caller distinguishes via the returned dict.
+
+    Returns a dict:
+        usernames       -- list of usernames that got deleted (may be empty)
+        deleted_count   -- int, len(usernames)
+        client_deleted  -- 0 or 1 (whether a clients row was removed)
+        ukey            -- the deleted client's uKey, or None
+        canonical_name  -- the client_name as stored in DB (case-corrected),
+                           or the input client_name if no client row existed
+    """
+    rows       = users_dal.list_users_for_client_for_cascade(conn, client_name)
+    client_row = clients_dal.get_client_brief_by_name(conn, client_name)
+
+    if rows:
+        users_dal.delete_users_by_client(conn, client_name)
+
+    client_deleted = 0
+    ukey           = None
+    canonical_name = client_name
+    if client_row:
+        clients_dal.delete_client_by_id(conn, client_row["id"])
+        client_deleted = 1
+        ukey           = client_row["ukey"]
+        canonical_name = client_row["client_name"]
+
+    usernames = [r["username"] for r in rows]
+    return {
+        "usernames":      usernames,
+        "deleted_count":  len(usernames),
+        "client_deleted": client_deleted,
+        "ukey":           ukey,
+        "canonical_name": canonical_name,
+    }

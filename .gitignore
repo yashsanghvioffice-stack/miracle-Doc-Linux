@@ -34,4 +34,6 @@ Thumbs.db
 # Project specific generated/temp files
 .helm-diag/
 
+
 *.md
+*.json

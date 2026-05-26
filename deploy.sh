@@ -12,19 +12,20 @@
 #  Workflow:
 #    1. Acquire exclusive lock (no concurrent deploys)
 #    2. Git fetch + diff against origin
-#    3. Halt if migration files are in the changeset (run manually first)
-#    4. Restrict deploys to allowed dir prefixes (etc/, opt/, var/)
-#    5. Backup existing files + track new files (manifest)
-#    6. Copy files
-#    7. Normalize permissions (fix-permissions.sh --quiet) so new files
+#    3. Restrict deploys to allowed dir prefixes (etc/, opt/, var/)
+#    4. Backup existing files + track new files (manifest)
+#    5. Copy files
+#    6. Normalize permissions (fix-permissions.sh --quiet) so new files
 #       land with correct owner/mode before the service touches them
+#    7. Sync DB schema (init_db.py) -- idempotent: creates missing
+#       tables/columns/indexes; no-op when schema already matches
 #    8. nginx -t before reload; rollback on failure
 #    9. Restart miracle-router; verify /health endpoint actually responds
 #   10. Prune old backups (keep last 20)
 #
 #  Rollback covers: modified files (restored from .bak),
 #                   new files (deleted).
-#  Rollback does NOT cover: schema migrations, manual hot-fixes.
+#  Rollback does NOT cover: DB schema changes (additive only), manual hot-fixes.
 # ══════════════════════════════════════════════════════════════
 
 
@@ -44,9 +45,10 @@ KEEP_BACKUPS=20
 # is silently ignored. Add new prefixes here as you expand.
 ALLOWED_PREFIXES=("etc/" "opt/" "var/")
 
-# Migration filename pattern. If git diff includes any file matching
-# this, the deploy HALTS and the operator must run the migration first.
-MIGRATION_PATTERN='^opt/miracle-router/migrate_.*\.py$'
+# DB bootstrap / schema-sync script. Run on every deploy AFTER files
+# are copied and permissions normalized, BEFORE the router restarts.
+# Idempotent: only adds missing tables / columns / indexes.
+INIT_DB_SCRIPT="$REPO_DIR/opt/miracle-router/init_db.py"
 
 # Flags
 DRY_RUN=false
@@ -153,7 +155,7 @@ log "Deployment Started (dry_run=$DRY_RUN, assume_yes=$ASSUME_YES)"
 log "═══════════════════════════════════════════════════════"
 
 # ─── STEP 1: GIT FETCH + DIFF ───────────────────────────────────
-log "[1/8] Checking for changes..."
+log "[1/9] Checking for changes..."
 cd "$REPO_DIR"
 
 # Detect the upstream branch (don't assume master vs main)
@@ -183,24 +185,7 @@ log "  Changed files (${UPSTREAM_BRANCH}):"
 echo "$CHANGED_FILES" | while read -r f; do log "    → $f"; done
 
 # ─── STEP 2: SAFETY GATES ───────────────────────────────────────
-log "[2/8] Safety checks..."
-
-# Halt if any migration files are in the changeset
-MIGRATION_FILES=$(echo "$CHANGED_FILES" | grep -E "$MIGRATION_PATTERN" || true)
-if [ -n "$MIGRATION_FILES" ]; then
-    log "═══════════════════════════════════════════════════════"
-    log "❌ HALT: migration files detected in changeset."
-    log "   Migrations alter schema and CANNOT be auto-rolled-back."
-    log "   You must run these manually before deploying:"
-    log ""
-    echo "$MIGRATION_FILES" | while read -r m; do
-        log "      sudo python3 /$m"
-    done
-    log ""
-    log "   Then re-run this deploy script."
-    log "═══════════════════════════════════════════════════════"
-    exit 2
-fi
+log "[2/9] Safety checks..."
 
 # Filter the changeset to only allowed prefixes
 DEPLOYABLE_FILES=""
@@ -250,13 +235,13 @@ fi
 if $DRY_RUN; then
     log "[DRY-RUN] would: git pull --ff-only origin $UPSTREAM_BRANCH"
 else
-    log "[3/8] Pulling from git..."
+    log "[3/9] Pulling from git..."
     git pull --ff-only origin "$UPSTREAM_BRANCH"
     log "  Now at: $(git rev-parse --short HEAD)"
 fi
 
 # ─── STEP 4: BACKUP + DEPLOY ────────────────────────────────────
-log "[4/8] Backup + deploy..."
+log "[4/9] Backup + deploy..."
 mkdir -p "$BACKUP_DIR"
 MANIFEST="$BACKUP_DIR/manifest.txt"
 NEWFILES_LIST="$BACKUP_DIR/new_files.list"
@@ -316,8 +301,8 @@ fi
 # the router try to use them. Idempotent; safe if nothing drifted.
 # We invoke via `bash <path>` so a missing +x on the freshly-copied
 # script doesn't block us bootstrapping it for the first time.
-log "[5/8] Normalizing permissions..."
-FIXPERMS="$REPO_DIR/opt/miracle-router/fix-permissions.sh"
+log "[5/9] Normalizing permissions..."
+FIXPERMS="$REPO_DIR/opt/miracle-scripts/fix-permissions.sh"
 if [ -f "$FIXPERMS" ]; then
     if bash "$FIXPERMS" --quiet; then
         log "  ✓ permissions normalized"
@@ -329,8 +314,25 @@ else
     log "  ⊘ $FIXPERMS not found, skipping (legacy install?)"
 fi
 
-# ─── STEP 6: NGINX VALIDATE + RELOAD ────────────────────────────
-log "[6/8] Validating nginx config..."
+# ─── STEP 6: DB SCHEMA SYNC ─────────────────────────────────────
+# Idempotent: creates missing tables/columns/indexes; does nothing
+# when the live schema already matches. Runs every deploy so that
+# adding a column to init_db.py is the only step needed to roll out
+# schema changes. Failure here trips the rollback trap.
+log "[6/9] Syncing DB schema..."
+if [ -f "$INIT_DB_SCRIPT" ]; then
+    if python3 "$INIT_DB_SCRIPT" >>"$LOG_FILE" 2>&1; then
+        log "  ✓ schema in sync"
+    else
+        log "  ✗ init_db.py failed -- triggering rollback (see $LOG_FILE)"
+        false
+    fi
+else
+    log "  ⊘ $INIT_DB_SCRIPT not found, skipping (legacy install?)"
+fi
+
+# ─── STEP 7: NGINX VALIDATE + RELOAD ────────────────────────────
+log "[7/9] Validating nginx config..."
 if nginx -t 2>>"$LOG_FILE"; then
     log "  ✓ nginx config valid"
     systemctl reload nginx
@@ -340,13 +342,13 @@ else
     false  # trip the ERR trap
 fi
 
-# ─── STEP 7: RESTART ROUTER ─────────────────────────────────────
-log "[7/8] Restarting miracle-router..."
+# ─── STEP 8: RESTART ROUTER ─────────────────────────────────────
+log "[8/9] Restarting miracle-router..."
 systemctl daemon-reload
 systemctl restart miracle-router
 
-# ─── STEP 8: HEALTH CHECK ───────────────────────────────────────
-log "[8/8] Health check..."
+# ─── STEP 9: HEALTH CHECK ───────────────────────────────────────
+log "[9/9] Health check..."
 
 # Wait up to 15 seconds for the service to come up
 HEALTH_OK=false

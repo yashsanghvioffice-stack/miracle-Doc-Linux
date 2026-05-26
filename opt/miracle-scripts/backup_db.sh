@@ -13,7 +13,7 @@
 #  Install as cron:
 #    sudo crontab -e
 #    # daily at 02:30 (low traffic):
-#    30 2 * * * /opt/miracle-repo/opt/miracle-router/backup-db.sh >> /var/log/miracle-backup.log 2>&1
+#    30 2 * * * /opt/miracle-scripts/backup_db.sh >> /var/log/miracle-backup.log 2>&1
 #
 #  What it does:
 #    1. sqlite3 .backup to a temp file (consistent, non-blocking)
