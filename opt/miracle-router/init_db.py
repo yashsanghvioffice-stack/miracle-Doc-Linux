@@ -30,6 +30,8 @@ SQLite ALTER TABLE ADD COLUMN restrictions (apply to `add_columns`):
     * Default cannot be CURRENT_TIMESTAMP / CURRENT_TIME / CURRENT_DATE.
 If a future column hits these limits, you must write a one-off
 ALTER+UPDATE block manually -- this script will not silently break.
+
+
 """
 
 import os
