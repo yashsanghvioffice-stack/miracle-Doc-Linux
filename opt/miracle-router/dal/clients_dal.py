@@ -17,9 +17,12 @@ def list_clients_enriched(conn):
 
     LEFT JOIN -- clients with no users still appear (admin user fields null).
     """
+    # display_name is COALESCE'd to client_name so legacy rows (created
+    # before the column existed) still return a usable label.
     return conn.execute("""
         SELECT c.id,
                c.client_name,
+               COALESCE(c.display_name, c.client_name) AS display_name,
                c.ukey,
                c.created_at,
                (SELECT COUNT(*) FROM users u
@@ -97,13 +100,15 @@ def most_common_server_for_client(conn, client_name):
     """, (client_name,)).fetchone()
 
 
-def create_client(conn, client_name, ukey):
-    """Insert and return the new row. Raises sqlite3.IntegrityError on
-    duplicate client_name or ukey -- caller distinguishes via follow-up
-    SELECTs (see get_client_brief_by_name / get_client_brief_by_ukey)."""
+def create_client(conn, client_name, ukey, display_name=None):
+    """Insert and return the new row. `display_name` is optional; when None
+    the column is left NULL and read endpoints fall back to client_name
+    via COALESCE. Raises sqlite3.IntegrityError on duplicate client_name
+    or ukey -- caller distinguishes via follow-up SELECTs (see
+    get_client_brief_by_name / get_client_brief_by_ukey)."""
     cur = conn.execute(
-        "INSERT INTO clients (client_name, ukey) VALUES (?, ?)",
-        (client_name, ukey),
+        "INSERT INTO clients (client_name, display_name, ukey) VALUES (?, ?, ?)",
+        (client_name, display_name, ukey),
     )
     new_id = cur.lastrowid
     return conn.execute(

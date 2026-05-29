@@ -308,6 +308,56 @@ print(" [%s] /rdp/download bogus token             -> %d" % ("PASS" if ok else "
 if ok: PASS += 1
 else:  FAIL += 1
 
+# ─── 7b. Explicit display_name on create / update ──────────────
+print("\n=== Client display_name ===")
+body = check("POST /admin/clients with explicit display_name",
+             hit("POST", "/admin/clients",
+                 headers=H,
+                 json={"client_name": "1056",
+                       "display_name": "RKIT Software",
+                       "ukey": "RKIT5678"}),
+             201)
+rkit_id = body.get("id")
+if body.get("display_name") == "RKIT Software" and body.get("client_name") == "1056":
+    PASS += 1
+    print(" [PASS] display_name persisted distinct from client_name")
+else:
+    FAIL += 1
+    print(" [FAIL] expected display_name='RKIT Software' got: %s" % body)
+
+# Verify display_name appears on the user record via JOIN (USER_SELECT)
+hit("POST", "/admin/users", headers=H,
+    json={"username": "rkit_u1", "client_name": "1056",
+          "email": "u1@rkit.example", "mobile": "+15550000001",
+          "server_id": server_id})
+body = check("GET /admin/users carries display_name via JOIN",
+             hit("GET", "/admin/users", headers=H),
+             200)
+rkit_user = next((u for u in (body.get("users") or [])
+                  if u.get("username") == "rkit_u1"), None)
+if rkit_user and rkit_user.get("display_name") == "RKIT Software":
+    PASS += 1
+    print(" [PASS] users LEFT JOIN exposes display_name='RKIT Software'")
+else:
+    FAIL += 1
+    print(" [FAIL] users join missing display_name: %s" % rkit_user)
+
+# Rename the display label via PUT
+body = check("PUT /admin/clients rename display_name",
+             hit("PUT", "/admin/clients/%s" % rkit_id,
+                 headers=H,
+                 json={"display_name": "RKIT Software Pvt Ltd"}),
+             200)
+if body.get("display_name") == "RKIT Software Pvt Ltd":
+    PASS += 1
+    print(" [PASS] display_name renamed via PUT")
+else:
+    FAIL += 1
+    print(" [FAIL] expected new display_name got: %s" % body)
+
+# Clean up
+hit("DELETE", "/admin/users/by-client/1056", headers=H)
+
 # ─── 8. Standalone client delete (no users attached) ────────────
 print("\n=== Standalone client delete ===")
 body = check("POST /admin/clients second client (no users)",

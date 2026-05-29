@@ -401,11 +401,19 @@
     <div class="page">
       <header class="header">
         <div class="logo-wrap">
+          <!--
+            Logo loading order:
+              1. Local assets/miracle-logo.svg (served by nginx from /var/www/miracle/assets/)
+              2. Remote rkitsoftware.com URL as fallback
+              3. Text card (.logo-fallback) if both fail
+          -->
           <img
-            src="https://www.rkitsoftware.com/assets/img/miraclelogo.svg"
+            id="miracleLogo"
+            src="assets/miracle-logo.svg"
+            data-remote-fallback="https://www.rkitsoftware.com/assets/img/miraclelogo.svg"
             alt="Miracle Accounting Software"
             onload="this.style.display='block';document.querySelector('.logo-fallback').style.display='none';"
-            onerror="this.style.display='none';document.querySelector('.logo-fallback').style.display='block';"
+            onerror="(function(img){if(img.dataset.remoteFallback){img.src=img.dataset.remoteFallback;img.dataset.remoteFallback='';}else{img.style.display='none';document.querySelector('.logo-fallback').style.display='block';}})(this);"
           />
         </div>
         <div class="logo-fallback">

@@ -29,22 +29,39 @@ from bl.clients_bl import (
 bp = Blueprint("admin_clients", __name__, url_prefix="/admin/clients")
 
 
+def _with_display_fallback(row):
+    """Single-row helper: convert a `clients` Row to dict and substitute
+    display_name = client_name when the column is NULL (legacy rows).
+    Used by endpoints that SELECT * from clients (which doesn't apply
+    the COALESCE that the list/USER_SELECT queries do)."""
+    d = dict(row)
+    if d.get("display_name") in (None, ""):
+        d["display_name"] = d.get("client_name")
+    return d
+
+
 @bp.route("", methods=["POST"])
 @require_api_key
 def client_create():
-    """Create a (client_name, ukey) row. PowerShell Setup calls this
-    BEFORE creating any user."""
+    """Create a (client_name, ukey, display_name) row. PowerShell Setup
+    calls this BEFORE creating any user.
+
+    `display_name` is optional in the body. When omitted or blank the
+    column is persisted as the client_name so the UI always has a label.
+    """
     data = parse_body()
     errors, cleaned = validate_client_create_payload(data)
     if errors:
         return jsonify({"status": "error", "code": M.CODE_VALIDATION_FAILED,
                         "message": errors[0]}), 400
-    client_name = cleaned["client_name"]
-    ukey        = cleaned["ukey"]
+    client_name  = cleaned["client_name"]
+    ukey         = cleaned["ukey"]
+    # Default the friendly label to the Customer ID when not provided.
+    display_name = cleaned.get("display_name") or client_name
 
     try:
         with db() as conn:
-            row = clients_dal.create_client(conn, client_name, ukey)
+            row = clients_dal.create_client(conn, client_name, ukey, display_name)
     except sqlite3.IntegrityError as e:
         # Surface which field clashed
         with db() as conn:
@@ -71,8 +88,9 @@ def client_create():
         return jsonify({"status": "error", "code": M.CODE_CONFLICT,
                         "message": M.MSG_CONFLICT, "detail": str(e)}), 409
 
-    log.info("Client created: id=%s name=%s ukey=%s", row["id"], client_name, ukey)
-    return jsonify(dict(row)), 201
+    log.info("Client created: id=%s name=%s display=%s ukey=%s",
+             row["id"], client_name, display_name, ukey)
+    return jsonify(_with_display_fallback(row)), 201
 
 
 @bp.route("", methods=["GET"])
@@ -92,7 +110,7 @@ def client_get(client_id):
             return jsonify({"status": "error", "code": M.CODE_CLIENT_NOT_FOUND,
                             "message": M.MSG_CLIENT_NOT_FOUND}), 404
         users = users_dal.list_users_for_client(conn, row["client_name"])
-    out = dict(row)
+    out = _with_display_fallback(row)
     out["users"] = [dict(u) for u in users]
     out["user_count"] = len(users)
     return jsonify(out)
@@ -110,7 +128,7 @@ def client_by_name(client_name):
             return jsonify({"status": "error", "code": M.CODE_CLIENT_NOT_FOUND,
                             "message": M.MSG_CLIENT_NOT_FOUND}), 404
         users = users_dal.list_users_for_client(conn, row["client_name"])
-    out = dict(row)
+    out = _with_display_fallback(row)
     out["users"] = [dict(u) for u in users]
     out["user_count"] = len(users)
     return jsonify(out)
@@ -127,19 +145,21 @@ def client_exists(client_name):
                         "message": M.MSG_INVALID_CLIENT_NAME_SHORT}), 200
 
     with db() as conn:
-        row = clients_dal.get_client_brief_by_name(conn, client_name)
+        row = clients_dal.get_client_by_name(conn, client_name)
         if not row:
             return jsonify({"exists": False})
         user_count = clients_dal.count_users_for_client(conn, row["client_name"])
         # Most-common server for this client (informational)
         srv = clients_dal.most_common_server_for_client(conn, row["client_name"])
 
+    display_name = row["display_name"] if row["display_name"] else row["client_name"]
     out = {
-        "exists":      True,
-        "id":          row["id"],
-        "client_name": row["client_name"],
-        "ukey":        row["ukey"],
-        "user_count":  user_count,
+        "exists":       True,
+        "id":           row["id"],
+        "client_name":  row["client_name"],
+        "display_name": display_name,
+        "ukey":         row["ukey"],
+        "user_count":   user_count,
     }
     if srv:
         out["server_ip"]   = srv["server_ip"]
@@ -184,7 +204,7 @@ def client_update(client_id):
                         "message": M.MSG_CONFLICT, "detail": str(e)}), 409
 
     log.info("Client updated: id=%s fields=%s", client_id, list(cleaned.keys()))
-    return jsonify(dict(row))
+    return jsonify(_with_display_fallback(row))
 
 
 @bp.route("/<int:client_id>", methods=["DELETE"])
@@ -201,9 +221,11 @@ def client_delete(client_id):
 
     log.info("Client deleted (row only): id=%s name=%s",
              client_id, row["client_name"])
+    display_name = row["display_name"] if row["display_name"] else row["client_name"]
     return jsonify({
-        "deleted":     True,
-        "id":          client_id,
-        "client_name": row["client_name"],
-        "ukey":        row["ukey"],
+        "deleted":      True,
+        "id":           client_id,
+        "client_name":  row["client_name"],
+        "display_name": display_name,
+        "ukey":         row["ukey"],
     })

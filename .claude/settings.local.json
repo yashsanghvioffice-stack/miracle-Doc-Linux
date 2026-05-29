@@ -15,7 +15,8 @@
       "Bash(py -3 -c \"import flask; print\\('flask', flask.__version__\\)\")",
       "Bash(py -3 -c \"import requests; print\\('requests', requests.__version__\\)\")",
       "Bash(py -3 tmp/self_test.py)",
-      "Bash(py -3 -c ' *)"
+      "Bash(py -3 -c ' *)",
+      "Bash(git check-ignore *)"
     ],
     "additionalDirectories": [
       "c:\\tmp"

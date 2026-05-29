@@ -18,7 +18,8 @@ USER_SELECT = """
     SELECT u.id, u.username, u.client_name, u.email, u.mobile,
            u.server_id, u.is_active, u.created_at, u.updated_at,
            s.server_name, s.server_ip,
-           c.ukey
+           c.ukey,
+           COALESCE(c.display_name, c.client_name) AS display_name
     FROM   users u
     JOIN   server_master s ON s.id = u.server_id
     LEFT JOIN clients c ON c.client_name = u.client_name COLLATE NOCASE

@@ -117,14 +117,17 @@ SCHEMA = [
         "table": "clients",
         "create": """
             CREATE TABLE IF NOT EXISTS clients (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                client_name  TEXT    NOT NULL UNIQUE COLLATE NOCASE,
-                ukey         TEXT    NOT NULL UNIQUE COLLATE NOCASE,
-                created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_name   TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+                display_name  TEXT,
+                ukey          TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+                created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 CHECK(length(ukey) = 8)
             )
         """,
-        "add_columns": {},
+        "add_columns": {
+            "display_name": "TEXT",
+        },
         "indexes": [
             "CREATE INDEX IF NOT EXISTS idx_clients_ukey ON clients(ukey COLLATE NOCASE)",
         ],
