@@ -49,7 +49,7 @@ upstream miracle_api {
 
 server {
     listen 80;
-    server_name miracle.cloud www.miracle.cloud;
+    server_name miracleon.cloud www.miracleon.cloud login.miracleon.cloud;
     root /var/www/miracle;
 
     # ---------------------------------------------------------------
