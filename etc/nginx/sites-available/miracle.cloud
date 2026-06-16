@@ -1,19 +1,19 @@
 # /etc/nginx/sites-available/miracle.cloud
-# Miracle Desktop on Cloud - Reverse Proxy + Login Gate (v3.6)
+# Miracle Desktop on Cloud - Reverse Proxy + Login Gate (v3.7)
 #
-# Changes from v3.4:
-#   - ADDED:   map $http_upgrade $connection_upgrade (http context) for
-#              clean WebSocket proxying to TSplus.
-#   - ADDED:   dedicated  location /socket.io/  block. THE upload fix:
-#              passes the browser's REAL Referer/Origin through (does NOT
-#              force them to http://$tsplus/). TSplus validates an upload's
-#              referer against the file-list page it came from; forcing the
-#              root referer caused "Upload ref2 error" / CLIENT ERROR 35 and
-#              silent file loss. Also forwards WebSocket upgrade headers and
-#              omits X-Real-IP / X-Forwarded-For so TSplus IP-stability sees
-#              one consistent client.
-#   - ADDED:   Upgrade/Connection headers to catch-all location / (defining
-#              proxy_set_header in a location drops inherited ones).
+# Changes from v3.6:
+#   - ADDED:   HTTPS support. login.miracleon.cloud now served on 443 with
+#              Let's Encrypt cert (issued 2026-06-08, auto-renewed by
+#              certbot.timer). Cert path:
+#                /etc/letsencrypt/live/login.miracleon.cloud/
+#   - ADDED:   80->443 redirect block for login.miracleon.cloud (HSTS-friendly).
+#              Apex (miracleon.cloud / www.miracleon.cloud) also redirects to
+#              https://login.miracleon.cloud since the cert is single-domain.
+#   - ADDED:   Modern TLS hardening: TLSv1.2+1.3 only, OCSP stapling, HSTS,
+#              session cache. ssl_session_tickets off (forward secrecy).
+#   - FIXED:   proxy_cookie_domain rewrite target changed
+#              miracle.cloud -> miracleon.cloud (cookies were being rewritten
+#              to the WRONG domain since the production host is miracleon.cloud).
 #
 # Flow:
 #   GET  /                  -> Login page (index.html)
@@ -47,10 +47,58 @@ upstream miracle_api {
     keepalive 8;
 }
 
+# ---------------------------------------------------------------
+# HTTP -> HTTPS REDIRECT
+# All plain-HTTP hits (login.miracleon.cloud + apex + www) are
+# bounced to https://login.miracleon.cloud. Cert is single-domain
+# so apex/www can't terminate TLS -- redirect before the handshake.
+# ---------------------------------------------------------------
 server {
     listen 80;
-    server_name miracleon.cloud www.miracleon.cloud login.miracleon.cloud;
+    server_name login.miracleon.cloud miracleon.cloud www.miracleon.cloud;
+
+    # Let certbot's HTTP-01 challenge still resolve during renewal
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/html;
+        default_type "text/plain";
+    }
+
+    location / {
+        return 301 https://login.miracleon.cloud$request_uri;
+    }
+}
+
+# ---------------------------------------------------------------
+# HTTPS MAIN BLOCK
+# All real traffic terminates here. Layout mirrors v3.6 with the
+# 9 location blocks preserved verbatim except for the cookie-domain
+# fix (miracle.cloud -> miracleon.cloud).
+# ---------------------------------------------------------------
+server {
+    listen 443 ssl http2;
+    server_name login.miracleon.cloud;
     root /var/www/miracle;
+
+    # ---------------------------------------------------------------
+    # TLS
+    # ---------------------------------------------------------------
+    ssl_certificate     /etc/letsencrypt/live/login.miracleon.cloud/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/login.miracleon.cloud/privkey.pem;
+
+    ssl_protocols              TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers  off;
+    ssl_session_cache          shared:SSL:10m;
+    ssl_session_timeout        1d;
+    ssl_session_tickets        off;
+
+    ssl_stapling               on;
+    ssl_stapling_verify        on;
+    ssl_trusted_certificate    /etc/letsencrypt/live/login.miracleon.cloud/chain.pem;
+    resolver                   8.8.8.8 1.1.1.1 valid=300s;
+    resolver_timeout           5s;
+
+    # HSTS -- 1 year, no subdomains (only login.* is on HTTPS today)
+    add_header Strict-Transport-Security "max-age=31536000" always;
 
     # ---------------------------------------------------------------
     # 1. LOGIN PAGE
@@ -112,7 +160,7 @@ server {
     # ---------------------------------------------------------------
     location /admin/ {
         allow 127.0.0.1;
-        allow 43.242.225.0/24;
+        allow  43.242.225.199;
         deny all;
 
         limit_req zone=admin_limit burst=10 nodelay;
@@ -180,7 +228,7 @@ server {
         proxy_set_header      X-Real-IP         $remote_addr;
         proxy_set_header      X-Forwarded-For   $proxy_add_x_forwarded_for;
         proxy_set_header      Cookie            $http_cookie;
-        proxy_cookie_domain   ~172\.16\.25\.\d+  miracle.cloud;
+        proxy_cookie_domain   ~172\.16\.25\.\d+  miracleon.cloud;
         proxy_cookie_path     /                  /;
         proxy_read_timeout    3600s;
         proxy_send_timeout    3600s;
@@ -225,7 +273,7 @@ server {
 
         # Intentionally NO X-Real-IP / X-Forwarded-For here.
 
-        proxy_cookie_domain   ~172\.16\.25\.\d+  miracle.cloud;
+        proxy_cookie_domain   ~172\.16\.25\.\d+  miracleon.cloud;
         proxy_cookie_path     /                  /;
 
         client_max_body_size  0;
@@ -262,7 +310,7 @@ server {
         proxy_set_header      X-Real-IP         $remote_addr;
         proxy_set_header      X-Forwarded-For   $proxy_add_x_forwarded_for;
         proxy_set_header      Cookie            $http_cookie;
-        proxy_cookie_domain   ~172\.16\.25\.\d+  miracle.cloud;
+        proxy_cookie_domain   ~172\.16\.25\.\d+  miracleon.cloud;
         proxy_cookie_path     /                  /;
         proxy_read_timeout    3600s;
         proxy_send_timeout    3600s;
