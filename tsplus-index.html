@@ -307,11 +307,19 @@
         .eye-btn svg { width: 18px; height: 18px; }
 
         /* TSplus inline validation icons (green check / red cross beside inputs).
-           common.js un-hides these on blur; they clash with the Miracle inputs
-           (and overlap the password eye button). Force-hidden -- validation
-           still runs, we just don't show the icons. */
+           common.js un-hides these on blur; they clash with the Miracle inputs.
+           Triple-defense: CSS + emptied innerHTML + JS-applied !important inline
+           style (see end of body script). */
         #span-login-ok, #span-login-ko,
-        #span-password-ok, #span-password-ko { display: none !important; }
+        #span-password-ok, #span-password-ko {
+            display: none !important;
+            visibility: hidden !important;
+            width: 0 !important;
+            height: 0 !important;
+            overflow: hidden !important;
+        }
+        #span-login-ok svg, #span-login-ko svg,
+        #span-password-ok svg, #span-password-ko svg { display: none !important; }
 
         /* Log on button -- TSplus uses <input type="button" id="buttonLogOn"> */
         #buttonLogOn {
@@ -403,15 +411,21 @@
            other client type above. */
         .preference-section { display: none !important; }
 
-        /* TSplus credentials-failed error banner */
+        /* TSplus credentials-failed error banner. TSplus toggles visibility
+           via inline style.display; we don't fight that. But we force layout
+           so when shown it's a full-width block, not a width:auto inline-block. */
         #span-credentials-ko {
             display: none;
-            margin-top: 18px;
+            margin: 18px 0 0 0;
             padding: 12px 16px;
             border-radius: 10px;
             font-size: 13px; font-weight: 600;
-            background: #fef2f2; border: 1px solid #fecaca; color: #dc2626;
+            background: #fef2f2;
+            border: 1px solid #fecaca;
+            color: #dc2626;
             text-align: center;
+            width: 100%;
+            box-sizing: border-box;
         }
 
         /* TSplus optional: "Windows plugin not found" prompt */
@@ -586,7 +600,7 @@
                                     <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
                                 </svg>
                                 <input type="password" name="Password" id="Editbox2" onfocus="onPasswordFocused();" value="" placeholder="Enter your password" autocomplete="current-password">
-                                <button type="button" class="eye-btn" id="eyeBtn" aria-label="Show/hide password">
+                                <button type="button" class="eye-btn" id="eyeBtn" tabindex="-1" aria-label="Show/hide password">
                                     <svg id="eyeIcon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                         <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
                                         <circle cx="12" cy="12" r="3"/>
@@ -829,23 +843,80 @@
             }
         });
 
-        // Password visibility toggle (replaces TSplus's .toggle-password handler;
-        // operates on the same Editbox2 element so TSplus side is unaffected)
+        // Password visibility toggle. Two defenses against TSplus quirks:
+        //   1. tabindex=-1 + mousedown.preventDefault() keep focus on the
+        //      password input so TSplus's onfocus/onblur handlers don't fire
+        //      and clear the field.
+        //   2. We re-focus Editbox2 after toggling so the user can keep typing.
         (function () {
             var btn  = document.getElementById("eyeBtn");
             var icon = document.getElementById("eyeIcon");
             var inp  = document.getElementById("Editbox2");
             if (!btn || !inp) return;
-            btn.addEventListener("click", function () {
+            btn.addEventListener("mousedown", function (e) {
+                // Prevents focus shift away from the password field
+                e.preventDefault();
+            });
+            btn.addEventListener("click", function (e) {
+                e.preventDefault();
+                e.stopPropagation();
+                var savedValue = inp.value;
                 var show = inp.type === "password";
                 inp.type = show ? "text" : "password";
+                inp.value = savedValue;        // defensive: re-assert value
                 icon.innerHTML = show
                     ? '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/>'
                     + '<path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/>'
                     + '<line x1="1" y1="1" x2="23" y2="23"/>'
                     : '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>'
                     + '<circle cx="12" cy="12" r="3"/>';
+                inp.focus();                   // keep cursor in field for typing
             });
+        })();
+
+        // Kill TSplus's inline validation icons (green/red dots). common.js
+        // un-hides them by setting style.display = 'inline' (no !important),
+        // but to be sure we ALSO empty their SVG content AND set
+        // style.display = 'none' with !important inline.
+        ['span-login-ok', 'span-login-ko', 'span-password-ok', 'span-password-ko']
+            .forEach(function (id) {
+                var el = document.getElementById(id);
+                if (!el) return;
+                el.innerHTML = '';
+                el.style.setProperty('display', 'none', 'important');
+                el.style.setProperty('visibility', 'hidden', 'important');
+            });
+
+        // Re-apply the kill on every blur so common.js can't re-show them.
+        ['Editbox1', 'Editbox2'].forEach(function (id) {
+            var inp = document.getElementById(id);
+            if (!inp) return;
+            inp.addEventListener('blur', function () {
+                setTimeout(function () {
+                    ['span-login-ok', 'span-login-ko', 'span-password-ok', 'span-password-ko']
+                        .forEach(function (sid) {
+                            var el = document.getElementById(sid);
+                            if (el) {
+                                el.innerHTML = '';
+                                el.style.setProperty('display', 'none', 'important');
+                            }
+                        });
+                }, 0);
+            });
+        });
+
+        // Force the "Invalid credentials" banner to render as a full-width
+        // block whenever TSplus makes it visible. TSplus toggles inline
+        // display; we observe and rewrite to "block" if it's anything else.
+        (function () {
+            var banner = document.getElementById('span-credentials-ko');
+            if (!banner || !window.MutationObserver) return;
+            new MutationObserver(function () {
+                var d = banner.style.display;
+                if (d && d !== 'none' && d !== 'block') {
+                    banner.style.display = 'block';
+                }
+            }).observe(banner, { attributes: true, attributeFilter: ['style'] });
         })();
 
         // TSplus collapsible sections inside the 2FA popin
