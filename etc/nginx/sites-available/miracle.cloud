@@ -160,7 +160,7 @@ server {
     # ---------------------------------------------------------------
     location /admin/ {
         allow 127.0.0.1;
-        allow  43.242.225.199;
+        allow 43.242.225.0/24;
         deny all;
 
         limit_req zone=admin_limit burst=10 nodelay;
