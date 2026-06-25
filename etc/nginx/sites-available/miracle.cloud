@@ -237,11 +237,8 @@ server {
 
 
   
-
-    # Place ABOVE  location /socket.io/
-    # Covers BOTH the Universal Printer PDF fetch and the file Download fetch.
-    
-    location ~ ^/socket\.io/.+/(print5|download5)/ {
+  # Place ABOVE  location /socket.io/
+    location ~ ^/socket\.io/.+/(print5|download5|list)/ {
         resolver 8.8.8.8 valid=30s;
         set $tsplus $cookie_miracle_target;
         if ($tsplus = '') { return 302 /; }
@@ -249,7 +246,7 @@ server {
         proxy_pass            http://$tsplus;
         proxy_http_version    1.1;
 
-        proxy_set_header      Host        $host;          # public domain, matches Referer
+        proxy_set_header      Host        $host;          # domain, matches Referer
         proxy_set_header      Referer     $http_referer;
         proxy_set_header      Origin      $http_origin;
         proxy_set_header      Cookie      $http_cookie;
@@ -262,6 +259,8 @@ server {
         proxy_send_timeout    3600s;
         proxy_connect_timeout 10s;
     }
+
+   
 
     # ---------------------------------------------------------------
     # 8. SOCKET.IO  -- upload + WebSocket-aware TSplus proxy  (new in v3.6)
