@@ -50,6 +50,13 @@ CODE_UNKNOWN_CLIENT                  = "UNKNOWN_CLIENT"
 CODE_USER_NOT_FOUND                  = "USER_NOT_FOUND"
 CODE_USERNAME_EXISTS                 = "USERNAME_EXISTS"
 
+CODE_PARTNER_NOT_FOUND               = "PARTNER_NOT_FOUND"
+CODE_PARTNER_NAME_EXISTS             = "PARTNER_NAME_EXISTS"
+CODE_PARTNER_IN_USE                  = "PARTNER_IN_USE"
+CODE_INVALID_PARTNER_NAME            = "INVALID_PARTNER_NAME"
+CODE_INVALID_EMAIL                   = "INVALID_EMAIL"
+CODE_INVALID_PHONE                   = "INVALID_PHONE"
+
 
 # =================================================================
 #  USER-FACING MESSAGES -- contract-compliant (login + RDP flow)
@@ -112,6 +119,17 @@ MSG_UNKNOWN_CLIENT_HINT_TMPL        = "Create the client first via POST /admin/c
 # ─── User resource ────────────────────────────────────────────────
 MSG_USER_NOT_FOUND                  = "User not found"
 MSG_USERNAME_EXISTS                 = "Username already exists"
+
+# ─── Partner resource ─────────────────────────────────────────────
+MSG_PARTNER_NOT_FOUND               = "Partner not found"
+MSG_PARTNER_NAME_EXISTS             = "Partner name already exists"
+MSG_PARTNER_NAME_EMPTY              = "Partner name cannot be empty"
+MSG_INVALID_PARTNER_NAME            = "Partner name must be 1-128 chars"
+MSG_MISSING_REQ_PARTNER_NAME        = "Missing required field: name"
+MSG_INVALID_EMAIL                   = "Invalid email format"
+MSG_INVALID_PHONE                   = "phone must be 7-20 chars (digits, spaces, +, -, parens)"
+MSG_PARTNER_IN_USE                  = "Partner is referenced by one or more clients"
+MSG_PARTNER_IN_USE_HINT             = "Deactivate (is_active=0) instead of deleting, or reassign clients first."
 
 
 # =================================================================

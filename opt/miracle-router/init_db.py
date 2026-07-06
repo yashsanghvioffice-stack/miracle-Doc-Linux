@@ -116,6 +116,29 @@ SCHEMA = [
         ],
     },
     {
+        "table": "partners",
+        "create": """
+            CREATE TABLE IF NOT EXISTS partners (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                name         TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+                email        TEXT,
+                phone        TEXT,
+                is_active    INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0,1)),
+                created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at   TIMESTAMP
+            )
+        """,
+        "add_columns": {
+            "email":      "TEXT",
+            "phone":      "TEXT",
+            "is_active":  "INTEGER NOT NULL DEFAULT 1",
+            "updated_at": "TIMESTAMP",
+        },
+        "indexes": [
+            "CREATE INDEX IF NOT EXISTS idx_partners_is_active ON partners(is_active)",
+        ],
+    },
+    {
         "table": "clients",
         "create": """
             CREATE TABLE IF NOT EXISTS clients (
@@ -123,15 +146,21 @@ SCHEMA = [
                 client_name   TEXT    NOT NULL UNIQUE COLLATE NOCASE,
                 display_name  TEXT,
                 ukey          TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+                partner_id    INTEGER,
                 created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 CHECK(length(ukey) = 8)
             )
         """,
         "add_columns": {
             "display_name": "TEXT",
+            # partner_id is added in Phase 1 so partners_dal can safely
+            # count referencing clients. The FK to partners(id) and the
+            # partner-selection endpoints land in Phase 2.
+            "partner_id":   "INTEGER",
         },
         "indexes": [
-            "CREATE INDEX IF NOT EXISTS idx_clients_ukey ON clients(ukey COLLATE NOCASE)",
+            "CREATE INDEX IF NOT EXISTS idx_clients_ukey       ON clients(ukey COLLATE NOCASE)",
+            "CREATE INDEX IF NOT EXISTS idx_clients_partner_id ON clients(partner_id)",
         ],
     },
     {

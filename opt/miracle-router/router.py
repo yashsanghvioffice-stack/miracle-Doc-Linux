@@ -46,6 +46,7 @@ from controllers.rdp_controller            import bp as rdp_bp
 from controllers.admin_servers_controller  import bp as admin_servers_bp
 from controllers.admin_clients_controller  import bp as admin_clients_bp
 from controllers.admin_users_controller    import bp as admin_users_bp
+from controllers.admin_partners_controller import bp as admin_partners_bp
 from controllers.admin_stats_controller    import bp as admin_stats_bp
 
 
@@ -58,6 +59,7 @@ app.register_blueprint(rdp_bp)
 app.register_blueprint(admin_servers_bp)
 app.register_blueprint(admin_clients_bp)
 app.register_blueprint(admin_users_bp)
+app.register_blueprint(admin_partners_bp)
 app.register_blueprint(admin_stats_bp)
 
 

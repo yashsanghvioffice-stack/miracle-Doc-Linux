@@ -21,7 +21,7 @@ TSPLUS_TIMEOUT        = 10           # seconds
 RDP_TOKEN_TTL_SECONDS = 300          # 5 minutes
 
 # ─── Schema ───────────────────────────────────────────────────────
-REQUIRED_TABLES = ("server_master", "users", "rdp_download_tokens", "clients", "request_log")
+REQUIRED_TABLES = ("server_master", "users", "rdp_download_tokens", "clients", "request_log", "partners")
 
 # ─── TSplus / RDP ─────────────────────────────────────────────────
 TSPLUS_RDP_PORT = 59359           # same for all TSplus servers
@@ -43,6 +43,13 @@ SERVER_NAME_RE = re.compile(r"^[A-Za-z0-9_\-\. ]{1,64}$")
 TOKEN_RE       = re.compile(r"^[a-f0-9]{32}$")
 UKEY_RE        = re.compile(r"^[A-Za-z0-9]{8}$")
 CLIENT_NAME_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
+
+# Partner name: 1-128 chars. Allow letters, digits, spaces, and common
+# punctuation seen in real company names (& . , ' - _ ( ) / +).
+PARTNER_NAME_RE = re.compile(r"^[A-Za-z0-9 &.,'\-_()/+]{1,128}$")
+
+# Partner / client contact phone: 7-20 chars of digits, spaces, +, -, (, ).
+PHONE_RE       = re.compile(r"^[0-9 +\-()]{7,20}$")
 
 # ─── TSplus browser fingerprint cookies ───────────────────────────
 # DO NOT change. Required by TSplus for /login auth -- all 16 keys
