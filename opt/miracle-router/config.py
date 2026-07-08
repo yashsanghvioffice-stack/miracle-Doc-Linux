@@ -13,6 +13,13 @@ import re
 DB_PATH = os.environ.get("MIRACLE_DB_PATH", "/etc/miracle-registry/miracle.db")
 API_KEY = os.environ.get("MIRACLE_API_KEY", "")
 
+# v4.1c: require partner_id on client create. Partner is mandatory per the
+# RA, so this defaults ON. During the EXE/PS Setup rollout window (before
+# those clients send a partner) set MIRACLE_REQUIRE_PARTNER=0 to relax it
+# temporarily and avoid breaking provisioning. Read at request time so it
+# can be toggled without a restart in tests.
+REQUIRE_PARTNER = os.environ.get("MIRACLE_REQUIRE_PARTNER", "1").strip().lower() in ("1", "true", "yes")
+
 # ─── Paths ────────────────────────────────────────────────────────
 LOG_PATH = "/var/log/miracle-router.log"
 
@@ -50,6 +57,20 @@ PARTNER_NAME_RE = re.compile(r"^[A-Za-z0-9 &.,'\-_()/+]{1,128}$")
 
 # Partner / client contact phone: 7-20 chars of digits, spaces, +, -, (, ).
 PHONE_RE       = re.compile(r"^[0-9 +\-()]{7,20}$")
+
+# Wire date format: ISO YYYY-MM-DD (the desktop app formats DD-MM-YYYY
+# for display only). Shape check only -- calendar validity (rejecting
+# 2026-13-40) is done by constructing a datetime.date in the BL layer.
+DATE_RE        = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+# user_type enum (Phase 2). 'new' = created in a Create-a-Customer batch,
+# 'additional' = added to an existing account later. Set by the flow, not
+# inferred from the username.
+USER_TYPES     = ("new", "additional")
+
+# subscription_type enum (v4.1). 'single' vs 'multi' user subscription,
+# chosen once at Setup and stored on the client.
+SUBSCRIPTION_TYPES = ("single", "multi")
 
 # ─── TSplus browser fingerprint cookies ───────────────────────────
 # DO NOT change. Required by TSplus for /login auth -- all 16 keys

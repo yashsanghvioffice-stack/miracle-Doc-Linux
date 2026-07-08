@@ -19,8 +19,10 @@ Cross-resource FK existence checks (server_id_exists, client_name_exists)
 stay as DAL helpers -- they're pure lookups, no rules to add on top.
 """
 
+from datetime import date
+
 from config import (
-    USERNAME_RE, EMAIL_RE, MOBILE_RE,
+    USERNAME_RE, EMAIL_RE, MOBILE_RE, USER_TYPES, DATE_RE,
 )
 from dal import users_dal, clients_dal
 
@@ -84,6 +86,33 @@ def validate_user_payload(data, partial=False):
             cleaned["is_active"] = int(v)
         else:
             errors.append("is_active must be 0 or 1")
+
+    # user_type (Phase 2). Optional; defaults to 'new' at the DB layer
+    # when omitted. Set by the desktop flow, not inferred from username.
+    if "user_type" in data and data["user_type"] is not None \
+            and str(data["user_type"]).strip() != "":
+        t = str(data["user_type"]).strip().lower()
+        if t not in USER_TYPES:
+            errors.append("user_type must be 'new' or 'additional'")
+        else:
+            cleaned["user_type"] = t
+
+    # start_date (v4.1). Optional; per-user subscription/purchase start.
+    # Controller defaults it to today when omitted.
+    if "start_date" in data and data["start_date"] is not None \
+            and str(data["start_date"]).strip() != "":
+        sd = str(data["start_date"]).strip()
+        valid = bool(DATE_RE.match(sd))
+        if valid:
+            try:
+                y, m, d = (int(x) for x in sd.split("-"))
+                date(y, m, d)
+            except ValueError:
+                valid = False
+        if not valid:
+            errors.append("start_date must be a valid date in YYYY-MM-DD format")
+        else:
+            cleaned["start_date"] = sd
 
     return errors, cleaned
 

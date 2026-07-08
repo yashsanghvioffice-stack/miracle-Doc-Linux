@@ -65,14 +65,13 @@ def validate_partner_create_payload(data):
 
     cleaned = {"name": name}
 
-    if "email" in data:
-        err, e = _validate_email(data["email"])
-        if err:
-            return [err], {}
-        # Only include the key when it survives validation as non-None,
-        # so the DAL persists NULL rather than an empty string.
-        if e is not None:
-            cleaned["email"] = e
+    # email is MANDATORY on create (v4.1c).
+    if "email" not in data or data["email"] is None or str(data["email"]).strip() == "":
+        return [M.MSG_PARTNER_EMAIL_REQUIRED], {}
+    err, e = _validate_email(data["email"])
+    if err:
+        return [err], {}
+    cleaned["email"] = e
 
     if "phone" in data:
         err, p = _validate_phone(data["phone"])
@@ -88,8 +87,8 @@ def validate_partner_update_payload(data):
     """Validate PUT /admin/partners/<id> body.
 
     All fields optional; controller returns MSG_NO_FIELDS_TO_UPDATE when
-    cleaned is empty AND errors is empty. Sending `email: ""` or
-    `phone: ""` clears the field (persists NULL).
+    cleaned is empty AND errors is empty. Sending `phone: ""` clears phone,
+    but email is MANDATORY (v4.1c) -- it can be changed but not cleared.
     """
     cleaned = {}
 
@@ -100,10 +99,13 @@ def validate_partner_update_payload(data):
         cleaned["name"] = name
 
     if "email" in data:
+        # email cannot be cleared -- it's mandatory (v4.1c).
+        if data["email"] is None or str(data["email"]).strip() == "":
+            return [M.MSG_PARTNER_EMAIL_REQUIRED], {}
         err, e = _validate_email(data["email"])
         if err:
             return [err], {}
-        cleaned["email"] = e  # may be None -> clears the column
+        cleaned["email"] = e
 
     if "phone" in data:
         err, p = _validate_phone(data["phone"])

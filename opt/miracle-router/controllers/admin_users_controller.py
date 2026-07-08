@@ -11,6 +11,7 @@ Admin endpoints for users:
 """
 
 import sqlite3
+from datetime import date
 
 from flask import Blueprint, jsonify, request
 
@@ -59,6 +60,10 @@ def user_create():
                 cleaned["mobile"],
                 cleaned["server_id"],
                 cleaned.get("is_active", 1),
+                cleaned.get("user_type", "new"),
+                # v4.1: per-user subscription start; default to today so
+                # every user of one Setup/Add-Users event shares a date.
+                cleaned.get("start_date") or date.today().isoformat(),
             )
         except sqlite3.IntegrityError as e:
             return jsonify({"status": "error", "code": M.CODE_USERNAME_EXISTS,
@@ -71,15 +76,55 @@ def user_create():
 @bp.route("", methods=["GET"])
 @require_api_key
 def user_list():
-    active_only = request.args.get("active_only", "").lower() in ("1", "true", "yes")
-    client      = request.args.get("client_name")
-    server_id   = request.args.get("server_id")
+    """User-wise Report (v4.1b).
+
+    DEFAULT: grouped rows -- one per (client × user_type × start_date) --
+    plus a `summary` block for the dashboard cards. This is the report grain.
+
+    `expand=true`: individual per-user rows (the pre-v4.1b shape, kept for
+    callers that need the raw list).
+
+    Filters (both modes): user_type, status (all|active|deactive), partner
+    (name substring), client_name, server_id, search (Account/Customer ID/
+    Partner/Ukey). Legacy `active_only` still honoured.
+    """
+    a = request.args
+    expand  = a.get("expand", "").lower() in ("1", "true", "yes")
+    filters = dict(
+        active_only = a.get("active_only", "").lower() in ("1", "true", "yes"),
+        client_name = a.get("client_name"),
+        server_id   = a.get("server_id"),
+        user_type   = a.get("user_type"),
+        partner     = a.get("partner"),
+        search      = a.get("search"),
+        status      = a.get("status"),
+    )
 
     with db() as conn:
-        rows = users_dal.list_users(conn, active_only=active_only,
-                                    client_name=client, server_id=server_id)
+        if expand:
+            rows = users_dal.list_users(conn, **filters)
+            return jsonify({"users": [dict(r) for r in rows], "count": len(rows)})
 
-    return jsonify({"users": [dict(r) for r in rows], "count": len(rows)})
+        grouped = users_dal.list_users_grouped(conn, **filters)
+        out = []
+        for r in grouped:
+            d = dict(r)
+            active   = d.get("active_users") or 0
+            inactive = d.get("inactive_users") or 0
+            # O1: badge is 'active' only when none are inactive; 'inactive'
+            # when none are active; 'mixed' otherwise. Cards count users.
+            d["status"] = ("active" if active and not inactive
+                           else "inactive" if not active
+                           else "mixed")
+            out.append(d)
+
+    summary = {
+        "total_customer_ids": len({(d["client_name"] or "").lower() for d in out}),
+        "total_users":        sum(d.get("no_of_users")     or 0 for d in out),
+        "active_users":       sum(d.get("active_users")    or 0 for d in out),
+        "deactive_users":     sum(d.get("inactive_users")  or 0 for d in out),
+    }
+    return jsonify({"summary": summary, "rows": out, "count": len(out)})
 
 
 @bp.route("/<int:user_id>", methods=["GET"])

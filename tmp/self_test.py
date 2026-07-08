@@ -54,6 +54,11 @@ except SystemExit as e:
 # 3. Patch LOG_PATH BEFORE the app imports logger
 import config
 config.LOG_PATH = TMP_LOG
+# v4.1c: partner_id is mandatory on client create by default. The bulk of
+# this suite predates that rule and creates clients without a partner, so
+# relax it here; the dedicated Phase 4.1c block toggles it back ON to test
+# enforcement, then OFF again.
+config.REQUIRE_PARTNER = False
 
 # 4. Import the Flask app
 from router import app
@@ -249,8 +254,8 @@ check("POST /admin/users validation: bad email",
           }),
       400, "VALIDATION_FAILED")
 
-body = check("GET /admin/users (includes ukey)",
-             hit("GET", "/admin/users", headers=H),
+body = check("GET /admin/users?expand=true (includes ukey)",
+             hit("GET", "/admin/users?expand=true", headers=H),
              200)
 # Verify the response actually contains ukey for our user
 users = body.get("users") or []
@@ -330,8 +335,8 @@ hit("POST", "/admin/users", headers=H,
     json={"username": "rkit_u1", "client_name": "1056",
           "email": "u1@rkit.example", "mobile": "+15550000001",
           "server_id": server_id})
-body = check("GET /admin/users carries display_name via JOIN",
-             hit("GET", "/admin/users", headers=H),
+body = check("GET /admin/users?expand=true carries display_name via JOIN",
+             hit("GET", "/admin/users?expand=true", headers=H),
              200)
 rkit_user = next((u for u in (body.get("users") or [])
                   if u.get("username") == "rkit_u1"), None)
@@ -438,23 +443,29 @@ else:
     FAIL += 1
     print(" [FAIL] expected is_active=1, got %s" % body.get("is_active"))
 
-# Create (name only — email/phone omitted store NULL)
-body = check("POST /admin/partners (name only)",
+# Email is mandatory (v4.1c): name only -> 400
+check("POST /admin/partners (name only -> email required)",
+      hit("POST", "/admin/partners", headers=H,
+          json={"name": "Solo Partner"}),
+      400, "VALIDATION_FAILED")
+
+# Create with email but no phone -> phone persists NULL
+body = check("POST /admin/partners (email, no phone)",
              hit("POST", "/admin/partners", headers=H,
-                 json={"name": "Solo Partner"}),
+                 json={"name": "Solo Partner", "email": "solo@example.com"}),
              201)
 solo_id = body.get("id")
-if body.get("email") is None and body.get("phone") is None:
+if body.get("email") == "solo@example.com" and body.get("phone") is None:
     PASS += 1
-    print(" [PASS] omitted email/phone persist as NULL")
+    print(" [PASS] omitted phone persists as NULL (email required)")
 else:
     FAIL += 1
-    print(" [FAIL] expected NULL email/phone, got %s" % body)
+    print(" [FAIL] expected NULL phone + email set, got %s" % body)
 
-# Duplicate name (case-insensitive)
+# Duplicate name (case-insensitive) — email present so it reaches the DB check
 check("POST /admin/partners duplicate name (case-insensitive)",
       hit("POST", "/admin/partners", headers=H,
-          json={"name": "acme DISTRIBUTION"}),
+          json={"name": "acme DISTRIBUTION", "email": "dup@example.com"}),
       409, "PARTNER_NAME_EXISTS")
 
 # Get by id
@@ -566,7 +577,519 @@ _c.commit()
 _c.close()
 
 
-# ─── 10. Verify request_log captured everything ─────────────────
+# ─── 10. Phase 2: client account fields + user_type ─────────────
+print("\n=== Phase 2: subscription dates + partner_id + user_type ===")
+
+# Fresh server + active partner for this self-contained section
+body = check("POST /admin/servers (phase2 server)",
+             hit("POST", "/admin/servers", headers=H,
+                 json={"server_name": "Phase2Svr", "server_ip": "10.0.2.2"}),
+             201)
+p2_server = body.get("id")
+
+body = check("POST /admin/partners (phase2 partner)",
+             hit("POST", "/admin/partners", headers=H,
+                 json={"name": "Phase2 Partner", "email": "p2@example.com"}),
+             201)
+p2_partner = body.get("id")
+
+# (a) v3.6-style three-field POST still succeeds + gets defaulted dates
+import datetime as _dt
+today_iso = _dt.date.today().isoformat()
+body = check("POST /admin/clients (v3.6 three-field, back-compat)",
+             hit("POST", "/admin/clients", headers=H,
+                 json={"client_name": "LegacyStyle", "ukey": "LEGA1234"}),
+             201)
+if body.get("subscription_end"):
+    PASS += 1
+    print(" [PASS] omitted expiry -> auto-calculated (client-level)")
+else:
+    FAIL += 1
+    print(" [FAIL] expected non-null subscription_end, got %s" % body)
+if body.get("partner_id") is None and "partner_name" in body:
+    PASS += 1
+    print(" [PASS] response carries partner_id(null) + partner_name key")
+else:
+    FAIL += 1
+    print(" [FAIL] partner fields missing on create response: %s" % body)
+
+# (b) POST with explicit partner_id + subscription_start -> end auto-calc'd
+body = check("POST /admin/clients (partner_id + start, end auto)",
+             hit("POST", "/admin/clients", headers=H,
+                 json={"client_name": "AcctFull", "ukey": "ACCT5678",
+                       "partner_id": p2_partner,
+                       "subscription_start": "2026-06-29"}),
+             201)
+acct_id = body.get("id")
+if body.get("subscription_end") == "2027-06-28":
+    PASS += 1
+    print(" [PASS] subscription_end auto-calc = start + 1yr - 1day (2027-06-28)")
+else:
+    FAIL += 1
+    print(" [FAIL] end auto-calc wrong: %s" % body)
+if body.get("partner_id") == p2_partner and body.get("partner_name") == "Phase2 Partner":
+    PASS += 1
+    print(" [PASS] partner_id persisted + partner_name joined")
+else:
+    FAIL += 1
+    print(" [FAIL] partner join wrong: %s" % body)
+
+# (c) POST with explicit start AND end -> stored as sent (no auto-calc)
+body = check("POST /admin/clients (explicit start + end)",
+             hit("POST", "/admin/clients", headers=H,
+                 json={"client_name": "AcctExplicit", "ukey": "ACCT9999",
+                       "subscription_start": "2026-01-01",
+                       "subscription_end": "2026-12-31"}),
+             201)
+if body.get("subscription_end") == "2026-12-31":
+    PASS += 1
+    print(" [PASS] explicit end stored as sent (not overwritten)")
+else:
+    FAIL += 1
+    print(" [FAIL] explicit end wrong: %s" % body)
+
+# (d) POST with bad partner_id -> 400 UNKNOWN_PARTNER
+check("POST /admin/clients bad partner_id",
+      hit("POST", "/admin/clients", headers=H,
+          json={"client_name": "BadPartner", "ukey": "BADP1234", "partner_id": 99999}),
+      400, "UNKNOWN_PARTNER")
+
+# (e) POST with bad date -> 400 VALIDATION_FAILED
+check("POST /admin/clients bad date format",
+      hit("POST", "/admin/clients", headers=H,
+          json={"client_name": "BadDate", "ukey": "BADD1234",
+                "subscription_start": "29-06-2026"}),
+      400, "VALIDATION_FAILED")
+
+check("POST /admin/clients impossible date",
+      hit("POST", "/admin/clients", headers=H,
+          json={"client_name": "BadDate2", "ukey": "BADD5678",
+                "subscription_start": "2026-13-40"}),
+      400, "VALIDATION_FAILED")
+
+# (f) PUT changes partner_id + both dates
+body = check("PUT /admin/clients change partner + dates",
+             hit("PUT", "/admin/clients/%s" % acct_id, headers=H,
+                 json={"partner_id": p2_partner,
+                       "subscription_start": "2027-03-01",
+                       "subscription_end": "2028-02-28"}),
+             200)
+if (body.get("subscription_end") == "2028-02-28"
+        and body.get("partner_id") == p2_partner):
+    PASS += 1
+    print(" [PASS] PUT updated partner_id + expiry")
+else:
+    FAIL += 1
+    print(" [FAIL] PUT update wrong: %s" % body)
+
+# (g) PUT new start without end -> auto-calc end
+body = check("PUT /admin/clients new start, end auto",
+             hit("PUT", "/admin/clients/%s" % acct_id, headers=H,
+                 json={"subscription_start": "2029-06-29"}),
+             200)
+if body.get("subscription_end") == "2030-06-28":
+    PASS += 1
+    print(" [PASS] PUT auto-calc end when only start sent")
+else:
+    FAIL += 1
+    print(" [FAIL] PUT auto-calc wrong: %s" % body)
+
+# (h) PUT bad partner_id -> 400
+check("PUT /admin/clients bad partner_id",
+      hit("PUT", "/admin/clients/%s" % acct_id, headers=H,
+          json={"partner_id": 88888}),
+      400, "UNKNOWN_PARTNER")
+
+# (i) GET client returns partner + subscription fields
+body = check("GET /admin/clients/<id> (Phase 2 fields)",
+             hit("GET", "/admin/clients/%s" % acct_id, headers=H),
+             200)
+if all(k in body for k in ("partner_id", "partner_name", "subscription_type", "storage_gb", "subscription_end")):
+    PASS += 1
+    print(" [PASS] GET client exposes partner + subscription_type/storage_gb/expiry")
+else:
+    FAIL += 1
+    print(" [FAIL] GET client missing account fields: %s" % list(body.keys()))
+
+# (j) GET list carries Phase 2 fields
+body = check("GET /admin/clients (list has Phase 2 fields)",
+             hit("GET", "/admin/clients", headers=H),
+             200)
+sample = body.get("clients", [{}])[0]
+if all(k in sample for k in ("partner_id", "partner_name", "subscription_type", "storage_gb", "subscription_end")):
+    PASS += 1
+    print(" [PASS] list rows carry account fields")
+else:
+    FAIL += 1
+    print(" [FAIL] list rows missing account fields: %s" % list(sample.keys()))
+
+# (k) users.user_type: default 'new' when omitted
+body = check("POST /admin/users (user_type omitted -> new)",
+             hit("POST", "/admin/users", headers=H,
+                 json={"username": "acct_admin1", "client_name": "AcctFull",
+                       "email": "a1@acct.example", "mobile": "+15551230001",
+                       "server_id": p2_server}),
+             201)
+if body.get("user_type") == "new":
+    PASS += 1
+    print(" [PASS] user_type defaults to 'new'")
+else:
+    FAIL += 1
+    print(" [FAIL] expected user_type='new', got %s" % body.get("user_type"))
+
+# (l) explicit user_type='additional' stored
+body = check("POST /admin/users (user_type=additional)",
+             hit("POST", "/admin/users", headers=H,
+                 json={"username": "acct_extra1", "client_name": "AcctFull",
+                       "email": "e1@acct.example", "mobile": "+15551230002",
+                       "server_id": p2_server, "user_type": "additional"}),
+             201)
+if body.get("user_type") == "additional":
+    PASS += 1
+    print(" [PASS] user_type='additional' stored")
+else:
+    FAIL += 1
+    print(" [FAIL] expected 'additional', got %s" % body.get("user_type"))
+
+# (m) invalid user_type -> 400
+check("POST /admin/users bad user_type",
+      hit("POST", "/admin/users", headers=H,
+          json={"username": "acct_bad1", "client_name": "AcctFull",
+                "email": "b1@acct.example", "mobile": "+15551230003",
+                "server_id": p2_server, "user_type": "banana"}),
+      400, "VALIDATION_FAILED")
+
+# (n) GET /admin/users?expand=true carries per-user report fields
+body = check("GET /admin/users?expand=true (report fields per row)",
+             hit("GET", "/admin/users?expand=true&client_name=AcctFull", headers=H),
+             200)
+rows = body.get("users", [])
+report_keys = ("user_type", "partner_id", "partner_name",
+               "subscription_end", "start_date", "display_name", "ukey")
+if rows and all(all(k in r for k in report_keys) for r in rows):
+    PASS += 1
+    print(" [PASS] every user row carries the full report field set")
+else:
+    FAIL += 1
+    print(" [FAIL] user rows missing report fields: %s"
+          % (list(rows[0].keys()) if rows else "no rows"))
+# and the joined partner_name actually resolved
+if rows and rows[0].get("partner_name") == "Phase2 Partner":
+    PASS += 1
+    print(" [PASS] partner_name resolves via user->client->partner join")
+else:
+    FAIL += 1
+    print(" [FAIL] partner_name join on user row wrong: %s"
+          % (rows[0].get("partner_name") if rows else "no rows"))
+
+
+# ─── 10b. Phase 4.1a: subscription_type + storage_gb + user start_date ──
+print("\n=== Phase 4.1a: subscription_type / storage_gb / user start_date ===")
+
+# Client with subscription_type + storage_gb persists + returns them
+body = check("POST /admin/clients (subscription_type + storage_gb)",
+             hit("POST", "/admin/clients", headers=H,
+                 json={"client_name": "AcctV41", "ukey": "V41A1234",
+                       "subscription_type": "multi", "storage_gb": 5}),
+             201)
+v41_id = body.get("id")
+if body.get("subscription_type") == "multi" and body.get("storage_gb") == 5:
+    PASS += 1
+    print(" [PASS] subscription_type + storage_gb persisted")
+else:
+    FAIL += 1
+    print(" [FAIL] account fields wrong: %s" % body)
+
+# Case-insensitive subscription_type
+body = check("POST /admin/clients (subscription_type SINGLE upper)",
+             hit("POST", "/admin/clients", headers=H,
+                 json={"client_name": "AcctV41b", "ukey": "V41B1234",
+                       "subscription_type": "SINGLE"}),
+             201)
+if body.get("subscription_type") == "single":
+    PASS += 1
+    print(" [PASS] subscription_type normalized to lowercase")
+else:
+    FAIL += 1
+    print(" [FAIL] expected 'single', got %s" % body.get("subscription_type"))
+
+# Invalid subscription_type -> 400
+check("POST /admin/clients bad subscription_type",
+      hit("POST", "/admin/clients", headers=H,
+          json={"client_name": "BadSub", "ukey": "BSUB1234",
+                "subscription_type": "enterprise"}),
+      400, "VALIDATION_FAILED")
+
+# Invalid storage_gb (zero) -> 400
+check("POST /admin/clients storage_gb=0",
+      hit("POST", "/admin/clients", headers=H,
+          json={"client_name": "BadStor", "ukey": "BSTO1234", "storage_gb": 0}),
+      400, "VALIDATION_FAILED")
+
+# Invalid storage_gb (non-int) -> 400
+check("POST /admin/clients storage_gb non-int",
+      hit("POST", "/admin/clients", headers=H,
+          json={"client_name": "BadStor2", "ukey": "BSTO5678", "storage_gb": "lots"}),
+      400, "VALIDATION_FAILED")
+
+# PUT can edit subscription_type + storage_gb
+body = check("PUT /admin/clients (edit type + storage)",
+             hit("PUT", "/admin/clients/%s" % v41_id, headers=H,
+                 json={"subscription_type": "single", "storage_gb": 20}),
+             200)
+if body.get("subscription_type") == "single" and body.get("storage_gb") == 20:
+    PASS += 1
+    print(" [PASS] PUT edited subscription_type + storage_gb")
+else:
+    FAIL += 1
+    print(" [FAIL] PUT edit wrong: %s" % body)
+
+# User with explicit start_date persists + returns it
+body = check("POST /admin/users (explicit start_date)",
+             hit("POST", "/admin/users", headers=H,
+                 json={"username": "v41_user1", "client_name": "AcctV41",
+                       "email": "u1@v41.example", "mobile": "+15551239001",
+                       "server_id": p2_server, "user_type": "new",
+                       "start_date": "2026-03-15"}),
+             201)
+if body.get("start_date") == "2026-03-15":
+    PASS += 1
+    print(" [PASS] explicit user start_date persisted")
+else:
+    FAIL += 1
+    print(" [FAIL] expected start_date=2026-03-15, got %s" % body.get("start_date"))
+
+# User without start_date -> defaults to today
+body = check("POST /admin/users (start_date omitted -> today)",
+             hit("POST", "/admin/users", headers=H,
+                 json={"username": "v41_user2", "client_name": "AcctV41",
+                       "email": "u2@v41.example", "mobile": "+15551239002",
+                       "server_id": p2_server}),
+             201)
+if body.get("start_date") == today_iso:
+    PASS += 1
+    print(" [PASS] omitted start_date defaults to today")
+else:
+    FAIL += 1
+    print(" [FAIL] expected start_date=%s, got %s" % (today_iso, body.get("start_date")))
+
+# Invalid start_date -> 400
+check("POST /admin/users bad start_date",
+      hit("POST", "/admin/users", headers=H,
+          json={"username": "v41_bad", "client_name": "AcctV41",
+                "email": "b@v41.example", "mobile": "+15551239003",
+                "server_id": p2_server, "start_date": "15-03-2026"}),
+      400, "VALIDATION_FAILED")
+
+# GET /admin/users?expand=true rows carry start_date + subscription_type + storage_gb
+body = check("GET /admin/users?expand=true (v4.1a fields per row)",
+             hit("GET", "/admin/users?expand=true&client_name=AcctV41", headers=H),
+             200)
+rows = body.get("users", [])
+v41_keys = ("start_date", "subscription_type", "storage_gb", "user_type")
+if rows and all(all(k in r for k in v41_keys) for r in rows):
+    PASS += 1
+    print(" [PASS] user rows carry start_date + subscription_type + storage_gb")
+else:
+    FAIL += 1
+    print(" [FAIL] user rows missing v4.1a fields: %s"
+          % (list(rows[0].keys()) if rows else "no rows"))
+
+
+# ─── 10c. Phase 4.1b: grouped report (GET /admin/users default) ──
+print("\n=== Phase 4.1b: grouped User-wise Report ===")
+
+# Dedicated account with a partner + known user batches
+body = check("POST /admin/clients (RptAcct)",
+             hit("POST", "/admin/clients", headers=H,
+                 json={"client_name": "RptAcct", "ukey": "RPT01234",
+                       "partner_id": p2_partner, "subscription_type": "multi",
+                       "storage_gb": 10}),
+             201)
+rpt_client_id = body.get("id")
+
+def _mkuser(uname, utype, sdate):
+    return hit("POST", "/admin/users", headers=H,
+               json={"username": uname, "client_name": "RptAcct",
+                     "email": uname + "@rpt.example", "mobile": "+15550000000",
+                     "server_id": p2_server, "user_type": utype,
+                     "start_date": sdate})
+
+# New batch: 3 users @ 2026-01-01
+_mkuser("rpt_new1", "new", "2026-01-01")
+_mkuser("rpt_new2", "new", "2026-01-01")
+b = _mkuser("rpt_new3", "new", "2026-01-01"); rpt_new3_id = json.loads(b.data.decode())["id"]
+# Additional batch (Jul): 2 users @ 2026-07-15
+_mkuser("rpt_add1", "additional", "2026-07-15")
+_mkuser("rpt_add2", "additional", "2026-07-15")
+# Additional batch (Aug): 1 user @ 2026-08-20
+_mkuser("rpt_add3", "additional", "2026-08-20")
+# Deactivate one New user -> tests active/inactive split + 'mixed' badge
+hit("POST", "/admin/users/%s/disable" % rpt_new3_id, headers=H)
+
+# Grouped default, scoped to RptAcct
+body = check("GET /admin/users (grouped, client=RptAcct)",
+             hit("GET", "/admin/users?client_name=RptAcct", headers=H),
+             200, expect_keys=["summary", "rows", "count"])
+rows = body.get("rows", [])
+summ = body.get("summary", {})
+
+if len(rows) == 3:
+    PASS += 1; print(" [PASS] 3 batch rows (1 New + 2 Additional dates)")
+else:
+    FAIL += 1; print(" [FAIL] expected 3 rows, got %d" % len(rows))
+
+if (summ.get("total_customer_ids") == 1 and summ.get("total_users") == 6
+        and summ.get("active_users") == 5 and summ.get("deactive_users") == 1):
+    PASS += 1; print(" [PASS] summary cards: 1 customer, 6 users, 5 active, 1 deactive")
+else:
+    FAIL += 1; print(" [FAIL] summary wrong: %s" % summ)
+
+if rows and all(r.get("total_users") == 6 for r in rows):
+    PASS += 1; print(" [PASS] total_users = client grand total (6) on every row")
+else:
+    FAIL += 1; print(" [FAIL] total_users wrong: %s" % [r.get("total_users") for r in rows])
+
+# grouped rows carry the CLIENT id (for the inline End-Date edit)
+if rows and all(r.get("id") == rpt_client_id for r in rows):
+    PASS += 1; print(" [PASS] grouped rows carry client id == %s" % rpt_client_id)
+else:
+    FAIL += 1; print(" [FAIL] grouped row id wrong: %s" % [r.get("id") for r in rows])
+
+new_row = next((r for r in rows if r["user_type"] == "new"), None)
+if new_row and new_row["no_of_users"] == 3 and new_row["active_users"] == 2 \
+        and new_row["inactive_users"] == 1 and new_row["status"] == "mixed":
+    PASS += 1; print(" [PASS] New row: 3 users, 2 active / 1 inactive, status=mixed")
+else:
+    FAIL += 1; print(" [FAIL] New row wrong: %s" % new_row)
+
+add_counts = sorted(r["no_of_users"] for r in rows if r["user_type"] == "additional")
+if add_counts == [1, 2]:
+    PASS += 1; print(" [PASS] Additional rows have counts 1 and 2")
+else:
+    FAIL += 1; print(" [FAIL] additional counts wrong: %s" % add_counts)
+
+# expand=true -> per-user rows
+body = check("GET /admin/users?expand=true (RptAcct users)",
+             hit("GET", "/admin/users?expand=true&client_name=RptAcct", headers=H),
+             200, expect_keys=["users", "count"])
+urows = body.get("users", [])
+if body.get("count") == 6:
+    PASS += 1; print(" [PASS] expand=true returns 6 per-user rows")
+else:
+    FAIL += 1; print(" [FAIL] expected 6 users, got %s" % body.get("count"))
+# per-user rows carry client_id (the client id) alongside id (the user id)
+if urows and all(u.get("client_id") == rpt_client_id for u in urows) \
+        and all("id" in u for u in urows):
+    PASS += 1; print(" [PASS] expand rows carry client_id (%s) alongside per-user id" % rpt_client_id)
+else:
+    FAIL += 1; print(" [FAIL] expand client_id wrong: %s"
+                     % [(u.get("id"), u.get("client_id")) for u in urows])
+
+# Filter: user_type=additional -> 2 rows, 3 users total
+body = check("GET /admin/users (grouped, user_type=additional)",
+             hit("GET", "/admin/users?client_name=RptAcct&user_type=additional", headers=H),
+             200)
+rows = body.get("rows", [])
+if len(rows) == 2 and sum(r["no_of_users"] for r in rows) == 3:
+    PASS += 1; print(" [PASS] user_type filter -> 2 additional rows, 3 users")
+else:
+    FAIL += 1; print(" [FAIL] user_type filter wrong: %s" % rows)
+
+# Filter: status=active -> New row now counts only 2 active
+body = check("GET /admin/users (grouped, status=active)",
+             hit("GET", "/admin/users?client_name=RptAcct&status=active", headers=H),
+             200)
+if body.get("summary", {}).get("total_users") == 5:
+    PASS += 1; print(" [PASS] status=active summary counts 5 active users")
+else:
+    FAIL += 1; print(" [FAIL] status=active summary wrong: %s" % body.get("summary"))
+
+# Filter: partner name substring
+body = check("GET /admin/users (grouped, partner=Phase2)",
+             hit("GET", "/admin/users?client_name=RptAcct&partner=Phase2", headers=H),
+             200)
+n_match = len(body.get("rows", []))
+body2 = check("GET /admin/users (grouped, partner=NoSuchPartner)",
+              hit("GET", "/admin/users?client_name=RptAcct&partner=NoSuchPartner", headers=H),
+              200)
+if n_match == 3 and len(body2.get("rows", [])) == 0:
+    PASS += 1; print(" [PASS] partner filter matches (3) / non-match (0)")
+else:
+    FAIL += 1; print(" [FAIL] partner filter wrong: match=%d nomatch=%d"
+                     % (n_match, len(body2.get("rows", []))))
+
+# Global search by Customer ID substring
+body = check("GET /admin/users (grouped, search=RptAcct)",
+             hit("GET", "/admin/users?search=RptAcct", headers=H),
+             200)
+srows = body.get("rows", [])
+if srows and all(r["client_name"] == "RptAcct" for r in srows) and len(srows) == 3:
+    PASS += 1; print(" [PASS] search=RptAcct isolates the 3 RptAcct rows")
+else:
+    FAIL += 1; print(" [FAIL] search wrong: %s" % [r.get("client_name") for r in srows])
+
+# Unscoped grouped default returns summary + rows envelope
+body = check("GET /admin/users (grouped, unscoped envelope)",
+             hit("GET", "/admin/users", headers=H),
+             200, expect_keys=["summary", "rows", "count"])
+if body.get("count", 0) >= 3:
+    PASS += 1; print(" [PASS] unscoped grouped default returns envelope")
+else:
+    FAIL += 1; print(" [FAIL] unscoped grouped wrong: count=%s" % body.get("count"))
+
+
+# ─── 10d. Phase 4.1c: partner + partner-email mandatory ──────────
+print("\n=== Phase 4.1c: partner + email mandatory ===")
+
+# Enforcement ON
+config.REQUIRE_PARTNER = True
+check("POST /admin/clients (no partner -> 400 when required)",
+      hit("POST", "/admin/clients", headers=H,
+          json={"client_name": "NeedPartner", "ukey": "NEED1234"}),
+      400, "VALIDATION_FAILED")
+
+body = check("POST /admin/clients (with partner -> 201 when required)",
+             hit("POST", "/admin/clients", headers=H,
+                 json={"client_name": "HasPartner", "ukey": "HASP1234",
+                       "partner_id": p2_partner}),
+             201)
+if body.get("partner_id") == p2_partner:
+    PASS += 1; print(" [PASS] client with partner created under enforcement")
+else:
+    FAIL += 1; print(" [FAIL] partner not set: %s" % body)
+
+# Relax again so any later additions don't need a partner
+config.REQUIRE_PARTNER = False
+check("POST /admin/clients (no partner -> 201 when relaxed)",
+      hit("POST", "/admin/clients", headers=H,
+          json={"client_name": "NoPartnerOK", "ukey": "NOPA1234"}),
+      201)
+
+# Partner email is mandatory: create without email -> 400
+check("POST /admin/partners (missing email -> 400)",
+      hit("POST", "/admin/partners", headers=H,
+          json={"name": "NoEmail Partner"}),
+      400, "VALIDATION_FAILED")
+
+# Partner email cannot be cleared via PUT -> 400
+check("PUT /admin/partners (clear email -> 400)",
+      hit("PUT", "/admin/partners/%s" % p2_partner, headers=H,
+          json={"email": ""}),
+      400, "VALIDATION_FAILED")
+
+# But changing email to a new valid value is fine
+body = check("PUT /admin/partners (change email -> 200)",
+             hit("PUT", "/admin/partners/%s" % p2_partner, headers=H,
+                 json={"email": "phase2-new@example.com"}),
+             200)
+if body.get("email") == "phase2-new@example.com":
+    PASS += 1; print(" [PASS] partner email changed to a new valid value")
+else:
+    FAIL += 1; print(" [FAIL] partner email change wrong: %s" % body)
+
+
+# ─── 11. Verify request_log captured everything ─────────────────
 print("\n=== request_log audit ===")
 import sqlite3
 conn = sqlite3.connect(TMP_DB)

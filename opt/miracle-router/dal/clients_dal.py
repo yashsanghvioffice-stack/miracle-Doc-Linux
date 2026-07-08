@@ -4,16 +4,31 @@ DAL: queries against the `clients` table (tenant uKey registry).
 Some functions cross-join `users` and `server_master` for enrichment
 (list, exists). Those joins are read-only and stay here because the
 result is per-client.
+
+CLIENT_SELECT is the canonical single-client read (Phase 2): clients
+LEFT JOIN partners so every get/create/update returns partner_name
+alongside the raw partner_id. LEFT JOIN keeps clients with no partner
+(partner_id NULL) and clients whose partner was soft-deleted visible.
+"""
+
+
+CLIENT_SELECT = """
+    SELECT c.*,
+           p.name AS partner_name
+    FROM   clients c
+    LEFT JOIN partners p ON p.id = c.partner_id
 """
 
 
 def list_clients_enriched(conn):
     """List endpoint shape: one row per client, joined with the admin
-    user (lowest-id user for that client) and that user's server.
+    user (lowest-id user for that client), that user's server, and the
+    account's partner.
 
-    Returns Rows with: id, client_name, ukey, created_at, user_count,
-    username, email, mobile, is_active, server_id, updated_at,
-    server_name, server_ip.
+    Returns Rows with: id, client_name, display_name, ukey, partner_id,
+    partner_name, subscription_start, subscription_end, created_at,
+    user_count, username, email, mobile, is_active, server_id,
+    updated_at, server_name, server_ip.
 
     LEFT JOIN -- clients with no users still appear (admin user fields null).
     """
@@ -24,6 +39,11 @@ def list_clients_enriched(conn):
                c.client_name,
                COALESCE(c.display_name, c.client_name) AS display_name,
                c.ukey,
+               c.partner_id,
+               p.name AS partner_name,
+               c.subscription_type,
+               c.storage_gb,
+               c.subscription_end,
                c.created_at,
                (SELECT COUNT(*) FROM users u
                   WHERE u.client_name = c.client_name COLLATE NOCASE) AS user_count,
@@ -41,21 +61,22 @@ def list_clients_enriched(conn):
             WHERE u2.client_name = c.client_name COLLATE NOCASE
         )
         LEFT JOIN server_master s ON s.id = u.server_id
+        LEFT JOIN partners p ON p.id = c.partner_id
         ORDER  BY c.client_name
     """).fetchall()
 
 
 def get_client_by_id(conn, client_id):
-    """Single client row, or None."""
+    """Single client row (+ partner_name), or None."""
     return conn.execute(
-        "SELECT * FROM clients WHERE id = ?", (client_id,)
+        CLIENT_SELECT + " WHERE c.id = ?", (client_id,)
     ).fetchone()
 
 
 def get_client_by_name(conn, client_name):
-    """Single client row by name (case-insensitive), or None."""
+    """Single client row (+ partner_name) by name (case-insensitive), or None."""
     return conn.execute(
-        "SELECT * FROM clients WHERE client_name = ? COLLATE NOCASE",
+        CLIENT_SELECT + " WHERE c.client_name = ? COLLATE NOCASE",
         (client_name,),
     ).fetchone()
 
@@ -100,25 +121,40 @@ def most_common_server_for_client(conn, client_name):
     """, (client_name,)).fetchone()
 
 
-def create_client(conn, client_name, ukey, display_name=None):
-    """Insert and return the new row. `display_name` is optional; when None
-    the column is left NULL and read endpoints fall back to client_name
-    via COALESCE. Raises sqlite3.IntegrityError on duplicate client_name
-    or ukey -- caller distinguishes via follow-up SELECTs (see
+def create_client(conn, client_name, ukey, display_name=None,
+                  partner_id=None, subscription_end=None,
+                  subscription_type=None, storage_gb=None):
+    """Insert and return the new row (+ partner_name via CLIENT_SELECT).
+
+    `display_name` is optional; when None the column is left NULL and read
+    endpoints fall back to client_name via COALESCE. `partner_id`,
+    `subscription_end` (expiry), `subscription_type`, and `storage_gb`
+    are optional -- the controller defaults/validates them before calling.
+
+    Note (v4.1): `subscription_start` is no longer written on the client;
+    the per-user start lives on users.start_date.
+
+    Raises sqlite3.IntegrityError on duplicate client_name or ukey --
+    caller distinguishes via follow-up SELECTs (see
     get_client_brief_by_name / get_client_brief_by_ukey)."""
-    cur = conn.execute(
-        "INSERT INTO clients (client_name, display_name, ukey) VALUES (?, ?, ?)",
-        (client_name, display_name, ukey),
-    )
+    cur = conn.execute("""
+        INSERT INTO clients
+            (client_name, display_name, ukey, partner_id,
+             subscription_end, subscription_type, storage_gb)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (client_name, display_name, ukey, partner_id,
+          subscription_end, subscription_type, storage_gb))
     new_id = cur.lastrowid
     return conn.execute(
-        "SELECT * FROM clients WHERE id = ?", (new_id,)
+        CLIENT_SELECT + " WHERE c.id = ?", (new_id,)
     ).fetchone()
 
 
 def update_client(conn, client_id, fields):
-    """Update arbitrary subset of (client_name, ukey). Returns the
-    post-update row. Raises sqlite3.IntegrityError on conflicts.
+    """Update arbitrary subset of (client_name, display_name, ukey,
+    partner_id, subscription_start, subscription_end). Returns the
+    post-update row (+ partner_name). Raises sqlite3.IntegrityError on
+    conflicts.
 
     Note: the *cascade* of a client_name change into users.client_name
     is the caller's responsibility (see cascade_rename_in_users()).
@@ -130,7 +166,7 @@ def update_client(conn, client_id, fields):
         params,
     )
     return conn.execute(
-        "SELECT * FROM clients WHERE id = ?", (client_id,)
+        CLIENT_SELECT + " WHERE c.id = ?", (client_id,)
     ).fetchone()
 
 

@@ -13,16 +13,18 @@ import sqlite3
 
 from flask import Blueprint, jsonify
 
+import config
 import messages as M
 from config import CLIENT_NAME_RE
 from logger import log
 
 from auth import require_api_key, parse_body
 from dal.connection import db
-from dal import clients_dal, users_dal
+from dal import clients_dal, users_dal, partners_dal
 from bl.clients_bl import (
     validate_client_create_payload,
     validate_client_update_payload,
+    apply_subscription_rules,
 )
 
 
@@ -59,9 +61,33 @@ def client_create():
     # Default the friendly label to the Customer ID when not provided.
     display_name = cleaned.get("display_name") or client_name
 
+    # Default/auto-calc the client expiry (subscription_end). v4.1: start
+    # is no longer stored on the client -- it lives on users.start_date.
+    apply_subscription_rules(cleaned, is_create=True)
+
+    # v4.1c: partner_id is mandatory on new setups (toggle via
+    # MIRACLE_REQUIRE_PARTNER during the EXE/PS rollout window).
+    partner_id = cleaned.get("partner_id")
+    if partner_id is None and config.REQUIRE_PARTNER:
+        return jsonify({"status": "error", "code": M.CODE_VALIDATION_FAILED,
+                        "message": M.MSG_MISSING_PARTNER}), 400
+
+    # A supplied partner_id must reference an existing partner.
+    if partner_id is not None:
+        with db() as conn:
+            if not partners_dal.get_partner_by_id(conn, partner_id):
+                return jsonify({"status": "error", "code": M.CODE_UNKNOWN_PARTNER,
+                                "message": M.MSG_UNKNOWN_PARTNER_TMPL.format(partner_id)}), 400
+
     try:
         with db() as conn:
-            row = clients_dal.create_client(conn, client_name, ukey, display_name)
+            row = clients_dal.create_client(
+                conn, client_name, ukey, display_name,
+                partner_id=partner_id,
+                subscription_end=cleaned.get("subscription_end"),
+                subscription_type=cleaned.get("subscription_type"),
+                storage_gb=cleaned.get("storage_gb"),
+            )
     except sqlite3.IntegrityError as e:
         # Surface which field clashed
         with db() as conn:
@@ -179,11 +205,21 @@ def client_update(client_id):
         return jsonify({"status": "error", "code": M.CODE_NO_FIELDS_TO_UPDATE,
                         "message": M.MSG_NO_FIELDS_TO_UPDATE}), 400
 
+    # Phase 2: auto-calc subscription_end only when a new start is sent
+    # without an explicit end (store-as-sent otherwise).
+    apply_subscription_rules(cleaned, is_create=False)
+
     with db() as conn:
         existing = clients_dal.get_client_by_id(conn, client_id)
         if not existing:
             return jsonify({"status": "error", "code": M.CODE_CLIENT_NOT_FOUND,
                             "message": M.MSG_CLIENT_NOT_FOUND}), 404
+
+        # Phase 2: a supplied partner_id must reference an existing partner.
+        if cleaned.get("partner_id") is not None:
+            if not partners_dal.get_partner_by_id(conn, cleaned["partner_id"]):
+                return jsonify({"status": "error", "code": M.CODE_UNKNOWN_PARTNER,
+                                "message": M.MSG_UNKNOWN_PARTNER_TMPL.format(cleaned["partner_id"])}), 400
 
         try:
             # Cascade the new client_name into users (denormalized FK)

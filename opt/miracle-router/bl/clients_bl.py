@@ -8,8 +8,10 @@ surfaces it as the `message` field of the standard
 {status, code, message} response (with code = CODE_VALIDATION_FAILED).
 """
 
+from datetime import date, timedelta
+
 import messages as M
-from config import CLIENT_NAME_RE, UKEY_RE
+from config import CLIENT_NAME_RE, UKEY_RE, DATE_RE, SUBSCRIPTION_TYPES
 
 
 DISPLAY_NAME_MAX = 128
@@ -24,6 +26,116 @@ def _validate_display_name(raw):
     if len(v) > DISPLAY_NAME_MAX:
         return "display_name must be 1-%d chars" % DISPLAY_NAME_MAX, None
     return None, v
+
+
+# ─── Phase 2: subscription dates + partner reference ──────────────
+
+def _parse_iso_date(iso_str):
+    """Parse a 'YYYY-MM-DD' string into a datetime.date. Raises
+    ValueError on an out-of-range calendar date (e.g. 2026-13-40)."""
+    y, m, d = (int(x) for x in iso_str.split("-"))
+    return date(y, m, d)
+
+
+def _validate_date(raw, field_name):
+    """Shape + calendar validity check for a wire date. Returns
+    (error_msg_or_None, iso_string_or_None). Rejects both malformed
+    strings and impossible calendar dates."""
+    v = str(raw or "").strip()
+    if not DATE_RE.match(v):
+        return M.MSG_INVALID_DATE_TMPL.format(field_name), None
+    try:
+        _parse_iso_date(v)
+    except ValueError:
+        return M.MSG_INVALID_DATE_TMPL.format(field_name), None
+    return None, v
+
+
+def add_one_year_minus_one_day(iso_start):
+    """Auto-calc subscription_end from a start date: start + 1 year − 1 day.
+    e.g. 2026-06-29 -> 2027-06-28. Input and output are ISO strings.
+
+    Feb-29 starts are clamped to Feb-28 of the following (non-leap) year
+    before subtracting the day -- a rare edge that never arises for the
+    real created-at-derived dates the backfill produces."""
+    start = _parse_iso_date(iso_start)
+    try:
+        plus_year = start.replace(year=start.year + 1)
+    except ValueError:                       # start is Feb 29
+        plus_year = start.replace(year=start.year + 1, day=28)
+    return (plus_year - timedelta(days=1)).isoformat()
+
+
+def _apply_optional_client_fields(data, cleaned):
+    """Validate and fold the Phase-2 optional client fields (partner_id,
+    subscription_start, subscription_end) into `cleaned`. Shared by the
+    create and update validators.
+
+    null / empty / missing are all treated identically as 'not provided'
+    -- the field is simply left out of `cleaned` (no clearing semantics).
+    Returns an error message string on the first bad value, else None.
+    """
+    if "partner_id" in data and data["partner_id"] is not None \
+            and str(data["partner_id"]).strip() != "":
+        try:
+            cleaned["partner_id"] = int(data["partner_id"])
+        except (TypeError, ValueError):
+            return M.MSG_INVALID_PARTNER_ID
+
+    for field in ("subscription_start", "subscription_end"):
+        if field in data and data[field] is not None and str(data[field]).strip() != "":
+            err, iso = _validate_date(data[field], field)
+            if err:
+                return err
+            cleaned[field] = iso
+
+    # subscription_type (v4.1) -- 'single' | 'multi', case-insensitive.
+    if "subscription_type" in data and data["subscription_type"] is not None \
+            and str(data["subscription_type"]).strip() != "":
+        v = str(data["subscription_type"]).strip().lower()
+        if v not in SUBSCRIPTION_TYPES:
+            return M.MSG_INVALID_SUBSCRIPTION_TYPE
+        cleaned["subscription_type"] = v
+
+    # storage_gb (v4.1) -- positive integer (total shared HARD quota).
+    if "storage_gb" in data and data["storage_gb"] is not None \
+            and str(data["storage_gb"]).strip() != "":
+        try:
+            n = int(data["storage_gb"])
+        except (TypeError, ValueError):
+            return M.MSG_INVALID_STORAGE_GB
+        if n <= 0:
+            return M.MSG_INVALID_STORAGE_GB
+        cleaned["storage_gb"] = n
+
+    return None
+
+
+def apply_subscription_rules(cleaned, is_create):
+    """Inject the client EXPIRY (subscription_end) default/auto-calc after
+    validation.
+
+    v4.1: subscription_start is NOT persisted on the client (per-user start
+    lives on users.start_date). A caller may still pass subscription_start
+    as the *basis* for the expiry auto-calc, but it is dropped before the
+    client is written.
+
+    * create: if subscription_end absent, calc = (provided start or today)
+      + 1yr − 1day.
+    * update: only auto-calc subscription_end when a new start was sent
+      without an end (store-as-sent otherwise).
+    """
+    if is_create:
+        if "subscription_end" not in cleaned:
+            base = cleaned.get("subscription_start") or date.today().isoformat()
+            cleaned["subscription_end"] = add_one_year_minus_one_day(base)
+    else:
+        if "subscription_start" in cleaned and "subscription_end" not in cleaned:
+            cleaned["subscription_end"] = add_one_year_minus_one_day(
+                cleaned["subscription_start"])
+
+    # subscription_start is never written on the client (deprecated column).
+    cleaned.pop("subscription_start", None)
 
 
 def validate_client_create_payload(data):
@@ -56,6 +168,12 @@ def validate_client_create_payload(data):
         if err:
             return [err], {}
         cleaned["display_name"] = dn
+
+    # Optional Phase-2 fields (partner_id, subscription dates). The
+    # controller applies defaults/auto-calc + partner existence after this.
+    err = _apply_optional_client_fields(data, cleaned)
+    if err:
+        return [err], {}
 
     return [], cleaned
 
@@ -91,5 +209,11 @@ def validate_client_update_payload(data):
         if err:
             return [err], {}
         cleaned["display_name"] = dn
+
+    # Optional Phase-2 fields (partner_id, subscription dates). The
+    # controller checks partner existence + auto-calcs end after this.
+    err = _apply_optional_client_fields(data, cleaned)
+    if err:
+        return [err], {}
 
     return [], cleaned

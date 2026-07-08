@@ -57,6 +57,15 @@ CODE_INVALID_PARTNER_NAME            = "INVALID_PARTNER_NAME"
 CODE_INVALID_EMAIL                   = "INVALID_EMAIL"
 CODE_INVALID_PHONE                   = "INVALID_PHONE"
 
+# ─── Phase 2: client account fields (partner ref, subscription dates) ─
+CODE_UNKNOWN_PARTNER                 = "UNKNOWN_PARTNER"
+CODE_INVALID_DATE                    = "INVALID_DATE"
+CODE_INVALID_USER_TYPE               = "INVALID_USER_TYPE"
+
+# ─── v4.1: subscription type + storage ────────────────────────────
+CODE_INVALID_SUBSCRIPTION_TYPE       = "INVALID_SUBSCRIPTION_TYPE"
+CODE_INVALID_STORAGE                 = "INVALID_STORAGE"
+
 
 # =================================================================
 #  USER-FACING MESSAGES -- contract-compliant (login + RDP flow)
@@ -130,6 +139,20 @@ MSG_INVALID_EMAIL                   = "Invalid email format"
 MSG_INVALID_PHONE                   = "phone must be 7-20 chars (digits, spaces, +, -, parens)"
 MSG_PARTNER_IN_USE                  = "Partner is referenced by one or more clients"
 MSG_PARTNER_IN_USE_HINT             = "Deactivate (is_active=0) instead of deleting, or reassign clients first."
+
+# ─── Phase 2: client account fields ───────────────────────────────
+MSG_INVALID_PARTNER_ID              = "partner_id must be an integer"
+MSG_UNKNOWN_PARTNER_TMPL            = "partner_id {} does not reference an existing partner"
+MSG_INVALID_DATE_TMPL               = "{} must be a valid date in YYYY-MM-DD format"
+MSG_INVALID_USER_TYPE               = "user_type must be 'new' or 'additional'"
+
+# ─── v4.1: subscription type + storage ────────────────────────────
+MSG_INVALID_SUBSCRIPTION_TYPE       = "subscription_type must be 'single' or 'multi'"
+MSG_INVALID_STORAGE_GB              = "storage_gb must be a positive integer"
+
+# ─── v4.1c: partner + partner-email mandatory ─────────────────────
+MSG_MISSING_PARTNER                 = "Missing required field: partner_id"
+MSG_PARTNER_EMAIL_REQUIRED          = "Partner email is required"
 
 
 # =================================================================

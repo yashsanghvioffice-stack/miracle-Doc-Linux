@@ -10,20 +10,35 @@ get a stable column set including ukey and server info.
 # ─── The shared joined SELECT ─────────────────────────────────────
 # Used by every user-read endpoint. Includes:
 #   - users columns (id, username, client_name, email, mobile, server_id,
-#                    is_active, created_at, updated_at)
+#                    is_active, user_type, created_at, updated_at)
 #   - server_master columns (server_name, server_ip)
-#   - clients column (ukey)   -- LEFT JOIN so orphaned users still appear
+#   - clients columns (ukey, display_name) -- LEFT JOIN so orphaned users
+#     still appear
+#   - account-level Phase-2 fields the User-wise Report needs, pulled from
+#     the user's client + that client's partner: partner_id, partner_name,
+#     subscription_start, subscription_end. This is THE single query that
+#     drives the report -- no per-row round trips.
 #
 USER_SELECT = """
     SELECT u.id, u.username, u.client_name, u.email, u.mobile,
-           u.server_id, u.is_active, u.created_at, u.updated_at,
+           u.server_id, u.is_active, u.user_type, u.start_date,
+           u.created_at, u.updated_at,
            s.server_name, s.server_ip,
+           c.id AS client_id,
            c.ukey,
-           COALESCE(c.display_name, c.client_name) AS display_name
+           COALESCE(c.display_name, c.client_name) AS display_name,
+           c.partner_id,
+           p.name AS partner_name,
+           c.subscription_type,
+           c.storage_gb,
+           c.subscription_end
     FROM   users u
     JOIN   server_master s ON s.id = u.server_id
     LEFT JOIN clients c ON c.client_name = u.client_name COLLATE NOCASE
+    LEFT JOIN partners p ON p.id = c.partner_id
 """
+# (USER_SELECT is defined above; c.id is exposed as client_id there so the
+#  per-user rows carry the CLIENT id alongside the user id.)
 
 
 # =================================================================
@@ -35,23 +50,94 @@ def get_user_by_id(conn, user_id):
     return conn.execute(USER_SELECT + " WHERE u.id = ?", (user_id,)).fetchone()
 
 
-def list_users(conn, active_only=False, client_name=None, server_id=None):
-    """List users with optional filters. Ordered by u.id."""
-    where  = []
-    params = []
-    if active_only:
+# ─── Shared filter builder (used by both list_users + list_users_grouped) ──
+# References aliases u (users), c (clients), p (partners) -- present in both
+# USER_SELECT and GROUPED_SELECT. Never references server_master, so it is
+# safe in the grouped query which doesn't join it.
+
+def _user_filter(active_only=False, client_name=None, server_id=None,
+                 user_type=None, partner=None, search=None, status=None):
+    """Return (where_clause, params) for the report/user-list filters.
+
+    status ('active'|'deactive'|'inactive'|'all') takes precedence over the
+    legacy active_only bool. partner is a name substring; search matches
+    across client_name / display_name / partner name / ukey.
+    """
+    where, params = [], []
+
+    s = (status or "").strip().lower()
+    if s == "active":
         where.append("u.is_active = 1")
+    elif s in ("deactive", "inactive"):
+        where.append("u.is_active = 0")
+    elif active_only:
+        where.append("u.is_active = 1")
+
     if client_name:
         where.append("u.client_name = ?")
         params.append(client_name)
     if server_id:
         where.append("u.server_id = ?")
         params.append(server_id)
+    if user_type and str(user_type).strip():
+        where.append("u.user_type = ?")
+        params.append(str(user_type).strip().lower())
+    if partner and str(partner).strip():
+        where.append("p.name LIKE ?")
+        params.append("%" + str(partner).strip() + "%")
+    if search and str(search).strip():
+        term = "%" + str(search).strip() + "%"
+        where.append("(u.client_name LIKE ? "
+                     "OR COALESCE(c.display_name, c.client_name) LIKE ? "
+                     "OR p.name LIKE ? OR c.ukey LIKE ?)")
+        params += [term, term, term, term]
 
-    query = USER_SELECT
-    if where:
-        query += " WHERE " + " AND ".join(where)
-    query += " ORDER BY u.id"
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
+    return clause, params
+
+
+def list_users(conn, **filters):
+    """List individual users (per-user rows) with optional filters.
+    Ordered by u.id. This is the `expand=true` shape."""
+    clause, params = _user_filter(**filters)
+    return conn.execute(USER_SELECT + clause + " ORDER BY u.id", params).fetchall()
+
+
+# ─── Grouped report (v4.1b) ───────────────────────────────────────
+# One row per (client × user_type × start_date) -- a "purchase batch".
+# no_of_users = count in the group; total_users = the client's grand total
+# (correlated subquery, filter-INdependent); active/inactive split within
+# the group. This is the DEFAULT `GET /admin/users` shape.
+
+GROUPED_SELECT = """
+    SELECT u.client_name,
+           c.id AS id,
+           COALESCE(c.display_name, c.client_name) AS display_name,
+           c.ukey,
+           c.partner_id,
+           p.name AS partner_name,
+           c.subscription_type,
+           c.storage_gb,
+           c.subscription_end,
+           u.user_type,
+           u.start_date,
+           COUNT(*)                                        AS no_of_users,
+           SUM(CASE WHEN u.is_active = 1 THEN 1 ELSE 0 END) AS active_users,
+           SUM(CASE WHEN u.is_active = 0 THEN 1 ELSE 0 END) AS inactive_users,
+           (SELECT COUNT(*) FROM users ut
+              WHERE ut.client_name = u.client_name COLLATE NOCASE) AS total_users
+    FROM   users u
+    LEFT JOIN clients  c ON c.client_name = u.client_name COLLATE NOCASE
+    LEFT JOIN partners p ON p.id = c.partner_id
+"""
+
+
+def list_users_grouped(conn, **filters):
+    """Grouped report rows. Same filters as list_users."""
+    clause, params = _user_filter(**filters)
+    query = (GROUPED_SELECT + clause +
+             " GROUP BY u.client_name COLLATE NOCASE, u.user_type, u.start_date"
+             " ORDER BY u.client_name COLLATE NOCASE, u.start_date, u.user_type")
     return conn.execute(query, params).fetchall()
 
 
@@ -119,13 +205,23 @@ def count_users_for_server(conn, server_id):
 #  WRITES
 # =================================================================
 
-def create_user(conn, username, client_name, email, mobile, server_id, is_active=1):
+def create_user(conn, username, client_name, email, mobile, server_id,
+                is_active=1, user_type="new", start_date=None):
     """Insert a user. Returns the new joined Row (via USER_SELECT).
-    Raises sqlite3.IntegrityError on duplicate username."""
+    Raises sqlite3.IntegrityError on duplicate username.
+
+    `user_type` (Phase 2) is 'new' or 'additional' -- the desktop app
+    sends the right value based on the flow; the DAL just stores it.
+
+    `start_date` (v4.1) is this user's subscription/purchase start date
+    (ISO YYYY-MM-DD). The controller defaults it to today when omitted."""
     cur = conn.execute("""
-        INSERT INTO users (username, client_name, email, mobile, server_id, is_active)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (username, client_name, email, mobile, server_id, is_active))
+        INSERT INTO users
+            (username, client_name, email, mobile, server_id, is_active,
+             user_type, start_date)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (username, client_name, email, mobile, server_id, is_active,
+          user_type, start_date))
     new_id = cur.lastrowid
     return conn.execute(USER_SELECT + " WHERE u.id = ?", (new_id,)).fetchone()
 

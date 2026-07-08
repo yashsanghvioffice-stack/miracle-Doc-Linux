@@ -79,6 +79,8 @@ SCHEMA = [
                 mobile       TEXT    NOT NULL,
                 server_id    INTEGER NOT NULL,
                 is_active    INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0,1)),
+                user_type    TEXT    NOT NULL DEFAULT 'new' CHECK(user_type IN ('new','additional')),
+                start_date   DATE,
                 created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at   TIMESTAMP,
                 FOREIGN KEY (server_id) REFERENCES server_master(id)
@@ -88,6 +90,16 @@ SCHEMA = [
             "email":      "TEXT NOT NULL DEFAULT ''",
             "mobile":     "TEXT NOT NULL DEFAULT ''",
             "is_active":  "INTEGER NOT NULL DEFAULT 1",
+            # user_type added in Phase 2. NOT NULL DEFAULT 'new' means the
+            # ALTER auto-fills every existing row with 'new' -- so the
+            # v4_3_backfill_users.py migration is a safety no-op. CHECK is
+            # omitted here (ADD COLUMN keeps it simple; the enum is
+            # enforced at the BL layer). Fresh DBs get the CHECK via CREATE.
+            "user_type":  "TEXT NOT NULL DEFAULT 'new'",
+            # start_date (v4.1a) = per-user subscription/purchase start
+            # (= creation date). Nullable; existing rows backfilled to
+            # date(created_at) by migrations/v4_4_backfill_user_start.py.
+            "start_date": "DATE",
             "updated_at": "TIMESTAMP",
         },
         "indexes": [
@@ -142,21 +154,38 @@ SCHEMA = [
         "table": "clients",
         "create": """
             CREATE TABLE IF NOT EXISTS clients (
-                id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                client_name   TEXT    NOT NULL UNIQUE COLLATE NOCASE,
-                display_name  TEXT,
-                ukey          TEXT    NOT NULL UNIQUE COLLATE NOCASE,
-                partner_id    INTEGER,
-                created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_name        TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+                display_name       TEXT,
+                ukey               TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+                partner_id         INTEGER,
+                subscription_type  TEXT,
+                storage_gb         INTEGER,
+                subscription_start DATE,
+                subscription_end   DATE,
+                created_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 CHECK(length(ukey) = 8)
             )
         """,
         "add_columns": {
             "display_name": "TEXT",
-            # partner_id is added in Phase 1 so partners_dal can safely
-            # count referencing clients. The FK to partners(id) and the
-            # partner-selection endpoints land in Phase 2.
-            "partner_id":   "INTEGER",
+            # partner_id added in Phase 1 so partners_dal can count
+            # referencing clients. Phase 2 activates it (writable via
+            # POST/PUT) and adds the subscription date columns. All three
+            # are nullable -- existing rows are populated by the one-shot
+            # migrations/v4_2_backfill_clients.py (SQLite ADD COLUMN can't
+            # take a date(created_at) default expression).
+            "partner_id":         "INTEGER",
+            # subscription_type ('single'|'multi') + storage_gb (total shared
+            # HARD quota) added in v4.1a. Nullable; enum enforced at BL. No
+            # backfill -- existing clients edited later via PUT.
+            "subscription_type":  "TEXT",
+            "storage_gb":         "INTEGER",
+            # subscription_start is DEPRECATED in v4.1 (start moved to
+            # users.start_date). Column kept for compatibility; no longer
+            # read or written. subscription_end (expiry) stays authoritative.
+            "subscription_start": "DATE",
+            "subscription_end":   "DATE",
         },
         "indexes": [
             "CREATE INDEX IF NOT EXISTS idx_clients_ukey       ON clients(ukey COLLATE NOCASE)",
