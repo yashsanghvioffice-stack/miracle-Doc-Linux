@@ -163,6 +163,8 @@ SCHEMA = [
                 storage_gb         INTEGER,
                 subscription_start DATE,
                 subscription_end   DATE,
+                contact_email      TEXT,
+                contact_mobile     TEXT,
                 created_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 CHECK(length(ukey) = 8)
             )
@@ -186,6 +188,11 @@ SCHEMA = [
             # read or written. subscription_end (expiry) stays authoritative.
             "subscription_start": "DATE",
             "subscription_end":   "DATE",
+            # Account-level customer contact (v4.1 migration). Nullable;
+            # distinct from per-user users.email/mobile. Seeded from the
+            # admin user by migrations/v4_5_seed_partners_contacts.py.
+            "contact_email":      "TEXT",
+            "contact_mobile":     "TEXT",
         },
         "indexes": [
             "CREATE INDEX IF NOT EXISTS idx_clients_ukey       ON clients(ukey COLLATE NOCASE)",

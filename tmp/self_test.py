@@ -1089,6 +1089,55 @@ else:
     FAIL += 1; print(" [FAIL] partner email change wrong: %s" % body)
 
 
+# ─── 10e. Client-level contact fields (v4.1 migration plumbing) ──
+print("\n=== Client-level contact (contact_email / contact_mobile) ===")
+
+body = check("POST /admin/clients (with contact)",
+             hit("POST", "/admin/clients", headers=H,
+                 json={"client_name": "ContactAcct", "ukey": "CTCT1234",
+                       "contact_email": "BILL@Acct.Example",
+                       "contact_mobile": "+91 98765-11111"}),
+             201)
+ct_id = body.get("id")
+if body.get("contact_email") == "bill@acct.example" and body.get("contact_mobile") == "+919876511111":
+    PASS += 1; print(" [PASS] contact persisted (email lowercased, mobile stripped)")
+else:
+    FAIL += 1; print(" [FAIL] contact wrong: %s" % body)
+
+check("POST /admin/clients bad contact_email",
+      hit("POST", "/admin/clients", headers=H,
+          json={"client_name": "BadCE", "ukey": "BADC1234", "contact_email": "not-an-email"}),
+      400, "VALIDATION_FAILED")
+
+check("POST /admin/clients bad contact_mobile",
+      hit("POST", "/admin/clients", headers=H,
+          json={"client_name": "BadCM", "ukey": "BADM1234", "contact_mobile": "abc"}),
+      400, "VALIDATION_FAILED")
+
+body = check("GET /admin/clients/<id> returns contact",
+             hit("GET", "/admin/clients/%s" % ct_id, headers=H), 200)
+if body.get("contact_email") == "bill@acct.example":
+    PASS += 1; print(" [PASS] GET client exposes contact_email")
+else:
+    FAIL += 1; print(" [FAIL] GET contact missing: %s" % list(body.keys()))
+
+body = check("PUT /admin/clients edit contact",
+             hit("PUT", "/admin/clients/%s" % ct_id, headers=H,
+                 json={"contact_email": "new@acct.example"}), 200)
+if body.get("contact_email") == "new@acct.example":
+    PASS += 1; print(" [PASS] PUT updated contact_email")
+else:
+    FAIL += 1; print(" [FAIL] PUT contact wrong: %s" % body)
+
+body = check("GET /admin/clients (list has contact fields)",
+             hit("GET", "/admin/clients", headers=H), 200)
+sample = body.get("clients", [{}])[0]
+if "contact_email" in sample and "contact_mobile" in sample:
+    PASS += 1; print(" [PASS] list rows carry contact fields")
+else:
+    FAIL += 1; print(" [FAIL] list missing contact fields: %s" % list(sample.keys()))
+
+
 # ─── 11. Verify request_log captured everything ─────────────────
 print("\n=== request_log audit ===")
 import sqlite3

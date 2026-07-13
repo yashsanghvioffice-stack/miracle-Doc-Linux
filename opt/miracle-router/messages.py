@@ -154,6 +154,10 @@ MSG_INVALID_STORAGE_GB              = "storage_gb must be a positive integer"
 MSG_MISSING_PARTNER                 = "Missing required field: partner_id"
 MSG_PARTNER_EMAIL_REQUIRED          = "Partner email is required"
 
+# ─── v4.1 migration: account-level customer contact ───────────────
+MSG_INVALID_CONTACT_EMAIL           = "contact_email must be a valid email address"
+MSG_INVALID_CONTACT_MOBILE          = "contact_mobile must be 7-15 digits, optional + prefix"
+
 
 # =================================================================
 #  STARTUP / FATAL MESSAGES

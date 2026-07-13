@@ -11,7 +11,9 @@ surfaces it as the `message` field of the standard
 from datetime import date, timedelta
 
 import messages as M
-from config import CLIENT_NAME_RE, UKEY_RE, DATE_RE, SUBSCRIPTION_TYPES
+from config import (
+    CLIENT_NAME_RE, UKEY_RE, DATE_RE, SUBSCRIPTION_TYPES, EMAIL_RE, MOBILE_RE,
+)
 
 
 DISPLAY_NAME_MAX = 128
@@ -107,6 +109,22 @@ def _apply_optional_client_fields(data, cleaned):
         if n <= 0:
             return M.MSG_INVALID_STORAGE_GB
         cleaned["storage_gb"] = n
+
+    # contact_email / contact_mobile (v4.1) -- account-level customer contact,
+    # distinct from per-user users.email/mobile. Same validation rules.
+    if "contact_email" in data and data["contact_email"] is not None \
+            and str(data["contact_email"]).strip() != "":
+        e = str(data["contact_email"]).strip().lower()
+        if not EMAIL_RE.match(e) or len(e) > 254:
+            return M.MSG_INVALID_CONTACT_EMAIL
+        cleaned["contact_email"] = e
+
+    if "contact_mobile" in data and data["contact_mobile"] is not None \
+            and str(data["contact_mobile"]).strip() != "":
+        m = str(data["contact_mobile"]).strip().replace(" ", "").replace("-", "")
+        if not MOBILE_RE.match(m):
+            return M.MSG_INVALID_CONTACT_MOBILE
+        cleaned["contact_mobile"] = m
 
     return None
 

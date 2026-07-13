@@ -87,6 +87,8 @@ def client_create():
                 subscription_end=cleaned.get("subscription_end"),
                 subscription_type=cleaned.get("subscription_type"),
                 storage_gb=cleaned.get("storage_gb"),
+                contact_email=cleaned.get("contact_email"),
+                contact_mobile=cleaned.get("contact_mobile"),
             )
     except sqlite3.IntegrityError as e:
         # Surface which field clashed

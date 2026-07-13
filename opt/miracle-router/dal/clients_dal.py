@@ -44,6 +44,8 @@ def list_clients_enriched(conn):
                c.subscription_type,
                c.storage_gb,
                c.subscription_end,
+               c.contact_email,
+               c.contact_mobile,
                c.created_at,
                (SELECT COUNT(*) FROM users u
                   WHERE u.client_name = c.client_name COLLATE NOCASE) AS user_count,
@@ -123,7 +125,8 @@ def most_common_server_for_client(conn, client_name):
 
 def create_client(conn, client_name, ukey, display_name=None,
                   partner_id=None, subscription_end=None,
-                  subscription_type=None, storage_gb=None):
+                  subscription_type=None, storage_gb=None,
+                  contact_email=None, contact_mobile=None):
     """Insert and return the new row (+ partner_name via CLIENT_SELECT).
 
     `display_name` is optional; when None the column is left NULL and read
@@ -140,10 +143,12 @@ def create_client(conn, client_name, ukey, display_name=None,
     cur = conn.execute("""
         INSERT INTO clients
             (client_name, display_name, ukey, partner_id,
-             subscription_end, subscription_type, storage_gb)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+             subscription_end, subscription_type, storage_gb,
+             contact_email, contact_mobile)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (client_name, display_name, ukey, partner_id,
-          subscription_end, subscription_type, storage_gb))
+          subscription_end, subscription_type, storage_gb,
+          contact_email, contact_mobile))
     new_id = cur.lastrowid
     return conn.execute(
         CLIENT_SELECT + " WHERE c.id = ?", (new_id,)
