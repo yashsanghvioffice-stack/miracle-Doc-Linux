@@ -41,7 +41,7 @@ def validate_user_payload(data, partial=False):
     errors = []
     cleaned = {}
 
-    required = ("username", "client_name", "email", "mobile", "server_id")
+    required = ("username", "client_name", "server_id")
     for f in required:
         if f in data and data[f] is not None and str(data[f]).strip() != "":
             cleaned[f] = data[f]
@@ -60,17 +60,35 @@ def validate_user_payload(data, partial=False):
             errors.append("client_name must be 1-128 chars")
         cleaned["client_name"] = c
 
-    if "email" in cleaned:
-        e = str(cleaned["email"]).strip().lower()
-        if not EMAIL_RE.match(e) or len(e) > 254:
-            errors.append("email format invalid")
-        cleaned["email"] = e
+    # email / mobile -- OPTIONAL (v4.2), and independent of each other:
+    #   * key omitted : CREATE stores '' (reads back as null); UPDATE unchanged
+    #   * null or ""  : clear -> '' (reads back as null) on both create + update
+    #   * non-empty   : validate + normalize (email lowercased, mobile stripped)
+    # A stored '' is surfaced as JSON null by USER_SELECT's NULLIF(). Format is
+    # only checked when a non-empty value is supplied.
+    if "email" in data:
+        raw = data["email"]
+        if raw is None or str(raw).strip() == "":
+            cleaned["email"] = ""
+        else:
+            e = str(raw).strip().lower()
+            if not EMAIL_RE.match(e) or len(e) > 254:
+                errors.append("email must be a valid email address")
+            cleaned["email"] = e
+    elif not partial:
+        cleaned["email"] = ""
 
-    if "mobile" in cleaned:
-        m = str(cleaned["mobile"]).strip().replace(" ", "").replace("-", "")
-        if not MOBILE_RE.match(m):
-            errors.append("mobile must be 7-15 digits, optional + prefix")
-        cleaned["mobile"] = m
+    if "mobile" in data:
+        raw = data["mobile"]
+        if raw is None or str(raw).strip() == "":
+            cleaned["mobile"] = ""
+        else:
+            m = str(raw).strip().replace(" ", "").replace("-", "")
+            if not MOBILE_RE.match(m):
+                errors.append("mobile must be 7-15 digits")
+            cleaned["mobile"] = m
+    elif not partial:
+        cleaned["mobile"] = ""
 
     if "server_id" in cleaned:
         try:

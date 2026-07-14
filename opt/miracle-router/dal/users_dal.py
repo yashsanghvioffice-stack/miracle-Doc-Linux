@@ -20,7 +20,9 @@ get a stable column set including ukey and server info.
 #     drives the report -- no per-row round trips.
 #
 USER_SELECT = """
-    SELECT u.id, u.username, u.client_name, u.email, u.mobile,
+    SELECT u.id, u.username, u.client_name,
+           NULLIF(u.email, '')  AS email,
+           NULLIF(u.mobile, '') AS mobile,
            u.server_id, u.is_active, u.user_type, u.start_date,
            u.created_at, u.updated_at,
            s.server_name, s.server_ip,
@@ -220,7 +222,12 @@ def create_user(conn, username, client_name, email, mobile, server_id,
     sends the right value based on the flow; the DAL just stores it.
 
     `start_date` (v4.1) is this user's subscription/purchase start date
-    (ISO YYYY-MM-DD). The controller defaults it to today when omitted."""
+    (ISO YYYY-MM-DD). The controller defaults it to today when omitted.
+
+    `email`/`mobile` (v4.2) are OPTIONAL: None is coerced to '' so the
+    NOT NULL columns are satisfied; USER_SELECT surfaces '' back as null."""
+    email  = email  or ""
+    mobile = mobile or ""
     cur = conn.execute("""
         INSERT INTO users
             (username, client_name, email, mobile, server_id, is_active,

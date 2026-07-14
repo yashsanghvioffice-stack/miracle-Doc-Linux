@@ -12,6 +12,13 @@ ENV/
 env.bak/
 venv.bak/
 
+.claude/
+.codex/
+.qodo/
+.agents/
+docs/
+
+
 # IDE / Editor
 .vscode/
 .idea/
@@ -38,3 +45,9 @@ Thumbs.db
 *.md
 *.json
 .claude
+*.xlsx
+*.db
+*.docx
+
+
+

@@ -50,8 +50,8 @@ def list_clients_enriched(conn):
                (SELECT COUNT(*) FROM users u
                   WHERE u.client_name = c.client_name COLLATE NOCASE) AS user_count,
                u.username,
-               u.email,
-               u.mobile,
+               NULLIF(u.email, '')  AS email,
+               NULLIF(u.mobile, '') AS mobile,
                u.is_active,
                u.server_id,
                u.updated_at,

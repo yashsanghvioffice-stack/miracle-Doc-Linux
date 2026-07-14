@@ -155,7 +155,8 @@ MSG_MISSING_PARTNER                 = "Missing required field: partner_id"
 MSG_PARTNER_EMAIL_REQUIRED          = "Partner email is required"
 
 # ─── v4.1 migration: account-level customer contact ───────────────
-MSG_INVALID_CONTACT_EMAIL           = "contact_email must be a valid email address"
+MSG_INVALID_CONTACT_EMAIL           = "contact_email must be one or more valid email addresses, comma-separated"
+MSG_TOO_MANY_CONTACT_EMAILS         = "contact_email accepts at most 20 addresses"
 MSG_INVALID_CONTACT_MOBILE          = "contact_mobile must be 7-15 digits, optional + prefix"
 
 

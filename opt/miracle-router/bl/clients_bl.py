@@ -18,6 +18,10 @@ from config import (
 
 DISPLAY_NAME_MAX = 128
 
+# contact_email may hold several addresses (comma-separated). Cap the count
+# so a runaway paste can't bloat the row; each address is length/format checked.
+CONTACT_EMAIL_MAX_COUNT = 20
+
 
 def _validate_display_name(raw):
     """Shared display_name check. Returns (error_msg_or_None, cleaned_or_None).
@@ -111,13 +115,29 @@ def _apply_optional_client_fields(data, cleaned):
         cleaned["storage_gb"] = n
 
     # contact_email / contact_mobile (v4.1) -- account-level customer contact,
-    # distinct from per-user users.email/mobile. Same validation rules.
+    # distinct from per-user users.email/mobile.
+    #
+    # contact_email accepts ONE OR MORE addresses, comma-separated. Each is
+    # trimmed + lowercased + format-checked; empty segments (stray commas) are
+    # dropped; duplicates are de-duped preserving order. Stored back as a
+    # normalized "a@x.com,b@y.com" string (no spaces).
     if "contact_email" in data and data["contact_email"] is not None \
             and str(data["contact_email"]).strip() != "":
-        e = str(data["contact_email"]).strip().lower()
-        if not EMAIL_RE.match(e) or len(e) > 254:
+        seen, emails = set(), []
+        for part in str(data["contact_email"]).split(","):
+            e = part.strip().lower()
+            if not e:
+                continue                       # tolerate stray/trailing commas
+            if not EMAIL_RE.match(e) or len(e) > 254:
+                return M.MSG_INVALID_CONTACT_EMAIL
+            if e not in seen:
+                seen.add(e)
+                emails.append(e)
+        if not emails:
             return M.MSG_INVALID_CONTACT_EMAIL
-        cleaned["contact_email"] = e
+        if len(emails) > CONTACT_EMAIL_MAX_COUNT:
+            return M.MSG_TOO_MANY_CONTACT_EMAILS
+        cleaned["contact_email"] = ",".join(emails)
 
     if "contact_mobile" in data and data["contact_mobile"] is not None \
             and str(data["contact_mobile"]).strip() != "":

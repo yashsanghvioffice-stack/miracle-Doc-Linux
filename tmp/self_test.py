@@ -1129,6 +1129,25 @@ if body.get("contact_email") == "new@acct.example":
 else:
     FAIL += 1; print(" [FAIL] PUT contact wrong: %s" % body)
 
+# Multi-address contact_email: comma-separated -> lowercased, trimmed,
+# de-duped (order kept), stored as "a@x.com,b@y.com" (no spaces).
+body = check("POST /admin/clients (multi contact_email)",
+             hit("POST", "/admin/clients", headers=H,
+                 json={"client_name": "MultiMail", "ukey": "MULT1234",
+                       "contact_email": "Owner@Acct.Example, billing@acct.example , owner@acct.example"}),
+             201)
+if body.get("contact_email") == "owner@acct.example,billing@acct.example":
+    PASS += 1; print(" [PASS] multi contact_email normalized + de-duped")
+else:
+    FAIL += 1; print(" [FAIL] multi contact_email wrong: %s" % body.get("contact_email"))
+
+# One bad address anywhere in the list rejects the whole value
+check("POST /admin/clients (multi contact_email, one invalid)",
+      hit("POST", "/admin/clients", headers=H,
+          json={"client_name": "MultiBad", "ukey": "MULB1234",
+                "contact_email": "good@x.com, not-an-email"}),
+      400, "VALIDATION_FAILED")
+
 body = check("GET /admin/clients (list has contact fields)",
              hit("GET", "/admin/clients", headers=H), 200)
 sample = body.get("clients", [{}])[0]
@@ -1136,6 +1155,62 @@ if "contact_email" in sample and "contact_mobile" in sample:
     PASS += 1; print(" [PASS] list rows carry contact fields")
 else:
     FAIL += 1; print(" [FAIL] list missing contact fields: %s" % list(sample.keys()))
+
+
+# ─── 10e. Optional user email / mobile (v4.2) ─────────────────────
+print("\n=== Optional user email / mobile ===")
+
+check("POST /admin/clients (OptCT host)",
+      hit("POST", "/admin/clients", headers=H,
+          json={"client_name": "OptCT", "ukey": "OPTC1234"}), 201)
+
+def _optuser(extra):
+    payload = {"client_name": "OptCT", "server_id": p2_server}
+    payload.update(extra)
+    return hit("POST", "/admin/users", headers=H, json=payload)
+
+# omitted email/mobile -> 201, both null
+body = check("POST user (no email/mobile)", _optuser({"username": "opt_none"}), 201)
+if body.get("email") is None and body.get("mobile") is None:
+    PASS += 1; print(" [PASS] omitted email/mobile stored + returned as null")
+else:
+    FAIL += 1; print(" [FAIL] expected null/null, got %s/%s" % (body.get("email"), body.get("mobile")))
+
+# explicit empty strings -> 201, both null
+body = check("POST user (email:'', mobile:'')",
+             _optuser({"username": "opt_empty", "email": "", "mobile": ""}), 201)
+if body.get("email") is None and body.get("mobile") is None:
+    PASS += 1; print(" [PASS] empty-string email/mobile -> null")
+else:
+    FAIL += 1; print(" [FAIL] expected null/null, got %s/%s" % (body.get("email"), body.get("mobile")))
+
+# valid email only, no mobile -> 201, email set (lowercased), mobile null
+body = check("POST user (email only)",
+             _optuser({"username": "opt_mailonly", "email": "Solo@Ex.Com"}), 201)
+opt_id = body.get("id")
+if body.get("email") == "solo@ex.com" and body.get("mobile") is None:
+    PASS += 1; print(" [PASS] email-only: email lowercased, mobile null")
+else:
+    FAIL += 1; print(" [FAIL] got %s/%s" % (body.get("email"), body.get("mobile")))
+
+# invalid email / mobile -> 400 (format only checked when non-empty)
+check("POST user (bad email)", _optuser({"username": "opt_bade", "email": "not-an-email"}),
+      400, "VALIDATION_FAILED")
+check("POST user (bad mobile)", _optuser({"username": "opt_badm", "mobile": "12"}),
+      400, "VALIDATION_FAILED")
+
+# still-required fields missing -> 400
+check("POST user (missing username/client/server)",
+      hit("POST", "/admin/users", headers=H, json={"email": "x@y.com"}),
+      400, "VALIDATION_FAILED")
+
+# PUT email:'' clears to null; mobile left unchanged (key omitted)
+body = check("PUT user (clear email)",
+             hit("PUT", "/admin/users/%s" % opt_id, headers=H, json={"email": ""}), 200)
+if body.get("email") is None:
+    PASS += 1; print(" [PASS] PUT email:'' cleared to null")
+else:
+    FAIL += 1; print(" [FAIL] expected null, got %s" % body.get("email"))
 
 
 # ─── 11. Verify request_log captured everything ─────────────────
