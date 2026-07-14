@@ -98,9 +98,12 @@ def _user_filter(active_only=False, client_name=None, server_id=None,
 
 def list_users(conn, **filters):
     """List individual users (per-user rows) with optional filters.
-    Ordered by u.id. This is the `expand=true` shape."""
+    Ordered by created_at DESC (newest-created first), u.id DESC as the
+    same-second tiebreaker. This is the `expand=true` shape."""
     clause, params = _user_filter(**filters)
-    return conn.execute(USER_SELECT + clause + " ORDER BY u.id", params).fetchall()
+    return conn.execute(
+        USER_SELECT + clause + " ORDER BY u.created_at DESC, u.id DESC", params
+    ).fetchall()
 
 
 # ─── Grouped report (v4.1b) ───────────────────────────────────────
@@ -137,7 +140,10 @@ def list_users_grouped(conn, **filters):
     clause, params = _user_filter(**filters)
     query = (GROUPED_SELECT + clause +
              " GROUP BY u.client_name COLLATE NOCASE, u.user_type, u.start_date"
-             " ORDER BY u.client_name COLLATE NOCASE, u.start_date, u.user_type")
+             # Newly-created batch on top: order groups by their most-recent
+             # user created_at; MAX(u.id) breaks ties (same-second creates)
+             # so the order is always deterministic.
+             " ORDER BY MAX(u.created_at) DESC, MAX(u.id) DESC")
     return conn.execute(query, params).fetchall()
 
 
