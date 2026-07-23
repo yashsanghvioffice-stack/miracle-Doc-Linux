@@ -31,6 +31,10 @@ bp = Blueprint("admin_users", __name__, url_prefix="/admin/users")
 @bp.route("", methods=["POST"])
 @require_api_key
 def user_create():
+    """POST /admin/users -- create one user. Required: username, client_name
+    (must already exist), server_id. `email`/`mobile` are OPTIONAL (v4.2).
+    Returns 201 with the joined row; 400 UNKNOWN_SERVER / UNKNOWN_CLIENT /
+    VALIDATION_FAILED; 409 USERNAME_EXISTS on a duplicate username."""
     data = parse_body()
     errors, cleaned = validate_user_payload(data, partial=False)
     if errors:
@@ -130,6 +134,7 @@ def user_list():
 @bp.route("/<int:user_id>", methods=["GET"])
 @require_api_key
 def user_get(user_id):
+    """GET /admin/users/<id> -- one joined user row; 404 USER_NOT_FOUND on miss."""
     with db() as conn:
         row = users_dal.get_user_by_id(conn, user_id)
     if not row:
@@ -141,6 +146,9 @@ def user_get(user_id):
 @bp.route("/<int:user_id>", methods=["PUT"])
 @require_api_key
 def user_update(user_id):
+    """PUT /admin/users/<id> -- partial update. Omitting a key leaves it
+    unchanged; `email`/`mobile` sent as "" clear to null (v4.2). 400 if no
+    valid fields; 404 USER_NOT_FOUND; 400 UNKNOWN_SERVER/UNKNOWN_CLIENT; 409 conflict."""
     data = parse_body()
     errors, cleaned = validate_user_payload(data, partial=True)
     if errors:
@@ -182,6 +190,8 @@ def user_update(user_id):
 @bp.route("/<int:user_id>", methods=["DELETE"])
 @require_api_key
 def user_delete(user_id):
+    """DELETE /admin/users/<id> -- remove ONE user row (leaves the client).
+    404 USER_NOT_FOUND on miss. Full cascade is /admin/users/by-client/<name>."""
     with db() as conn:
         existing = users_dal.get_user_username(conn, user_id)
         if not existing:
@@ -196,6 +206,7 @@ def user_delete(user_id):
 @bp.route("/<int:user_id>/disable", methods=["POST"])
 @require_api_key
 def user_disable(user_id):
+    """POST /admin/users/<id>/disable -- set is_active=0; returns the updated row."""
     with db() as conn:
         if not users_dal.user_id_exists(conn, user_id):
             return jsonify({"status": "error", "code": M.CODE_USER_NOT_FOUND,
@@ -208,6 +219,7 @@ def user_disable(user_id):
 @bp.route("/<int:user_id>/enable", methods=["POST"])
 @require_api_key
 def user_enable(user_id):
+    """POST /admin/users/<id>/enable -- set is_active=1; returns the updated row."""
     with db() as conn:
         if not users_dal.user_id_exists(conn, user_id):
             return jsonify({"status": "error", "code": M.CODE_USER_NOT_FOUND,

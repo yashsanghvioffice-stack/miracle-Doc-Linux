@@ -78,6 +78,7 @@ def partner_list():
 @bp.route("/<int:partner_id>", methods=["GET"])
 @require_api_key
 def partner_get(partner_id):
+    """GET /admin/partners/<id> -- one partner row; 404 PARTNER_NOT_FOUND on miss."""
     with db() as conn:
         row = partners_dal.get_partner_by_id(conn, partner_id)
     if not row:
@@ -89,6 +90,9 @@ def partner_get(partner_id):
 @bp.route("/<int:partner_id>", methods=["PUT"])
 @require_api_key
 def partner_update(partner_id):
+    """PUT /admin/partners/<id> -- partial update of {name, email, phone, is_active}.
+    `email` cannot be cleared (mandatory, v4.1c). 400 no-fields; 404 PARTNER_NOT_FOUND;
+    409 PARTNER_NAME_EXISTS on a duplicate name."""
     data = parse_body()
     errors, cleaned = validate_partner_update_payload(data)
     if errors:

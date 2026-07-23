@@ -16,6 +16,8 @@ bp = Blueprint("admin_stats", __name__)
 @bp.route("/admin/stats", methods=["GET"])
 @require_api_key
 def admin_stats():
+    """GET /admin/stats -- aggregate gateway counts: overall totals plus a
+    per_server breakdown."""
     with db() as conn:
         snap = stats_dal.admin_stats_snapshot(conn)
     snap["per_server"] = [dict(r) for r in snap["per_server"]]

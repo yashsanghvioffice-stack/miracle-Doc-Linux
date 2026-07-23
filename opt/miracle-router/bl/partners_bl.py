@@ -15,6 +15,11 @@ import messages as M
 from config import EMAIL_RE, PARTNER_NAME_RE, PHONE_RE
 
 
+# partners.email may hold several addresses (comma-separated), like
+# clients.contact_email. Cap the count; each address is format/length checked.
+PARTNER_EMAIL_MAX_COUNT = 20
+
+
 def _validate_name(raw):
     """Shared partner-name check. Returns (error_msg_or_None, cleaned_or_None)."""
     v = str(raw or "").strip()
@@ -26,14 +31,30 @@ def _validate_name(raw):
 
 
 def _validate_email(raw):
-    """Shared email check. Returns (error_msg_or_None, cleaned_or_None).
-    Empty string is treated as 'clear this field' -- valid, cleaned to None."""
+    """Shared partner-email check. Accepts ONE OR MORE addresses, comma-separated
+    (v4.2). Returns (error_msg_or_None, cleaned_or_None). Blank -> (None, None)
+    ('clear this field'); the mandatory-email callers reject empty separately.
+    Each address is trimmed + lowercased + format-checked; empty segments (stray
+    commas) dropped; duplicates de-duped preserving order; stored normalized as
+    'a@x.com,b@y.com' (no spaces), capped at PARTNER_EMAIL_MAX_COUNT."""
     v = str(raw or "").strip()
     if not v:
         return None, None
-    if not EMAIL_RE.match(v):
+    seen, emails = set(), []
+    for part in v.split(","):
+        e = part.strip().lower()
+        if not e:
+            continue                       # tolerate stray/trailing commas
+        if not EMAIL_RE.match(e) or len(e) > 254:
+            return M.MSG_INVALID_EMAIL, None
+        if e not in seen:
+            seen.add(e)
+            emails.append(e)
+    if not emails:
         return M.MSG_INVALID_EMAIL, None
-    return None, v
+    if len(emails) > PARTNER_EMAIL_MAX_COUNT:
+        return M.MSG_TOO_MANY_PARTNER_EMAILS, None
+    return None, ",".join(emails)
 
 
 def _validate_phone(raw):

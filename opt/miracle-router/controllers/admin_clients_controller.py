@@ -124,6 +124,8 @@ def client_create():
 @bp.route("", methods=["GET"])
 @require_api_key
 def client_list():
+    """GET /admin/clients -- all clients as {clients, count}, each enriched with
+    partner_name + the admin (lowest-id) user's contact via LEFT JOIN."""
     with db() as conn:
         rows = clients_dal.list_clients_enriched(conn)
     return jsonify({"clients": [dict(r) for r in rows], "count": len(rows)})
@@ -132,6 +134,8 @@ def client_list():
 @bp.route("/<int:client_id>", methods=["GET"])
 @require_api_key
 def client_get(client_id):
+    """GET /admin/clients/<id> -- one client plus its `users` array and
+    `user_count`; 404 CLIENT_NOT_FOUND on miss."""
     with db() as conn:
         row = clients_dal.get_client_by_id(conn, client_id)
         if not row:
@@ -147,6 +151,8 @@ def client_get(client_id):
 @bp.route("/by-name/<client_name>", methods=["GET"])
 @require_api_key
 def client_by_name(client_name):
+    """GET /admin/clients/by-name/<name> -- same shape as client_get, looked up
+    by Customer ID (case-insensitive). 400 on a malformed name; 404 on miss."""
     if not CLIENT_NAME_RE.match(client_name or ""):
         return jsonify({"status": "error", "code": M.CODE_INVALID_CLIENT_NAME,
                         "message": M.MSG_INVALID_CLIENT_NAME_SHORT}), 400
@@ -198,6 +204,10 @@ def client_exists(client_name):
 @bp.route("/<int:client_id>", methods=["PUT"])
 @require_api_key
 def client_update(client_id):
+    """PUT /admin/clients/<id> -- partial update of any client field (display_name,
+    ukey, partner_id, subscription_type/end, storage_gb, contact_email/mobile).
+    Renaming client_name cascades into users.client_name. 400 no-fields /
+    UNKNOWN_PARTNER; 404 CLIENT_NOT_FOUND; 409 CLIENT_NAME_EXISTS / UKEY_IN_USE."""
     data = parse_body()
     errors, cleaned = validate_client_update_payload(data)
     if errors:

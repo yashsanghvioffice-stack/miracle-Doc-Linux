@@ -23,6 +23,9 @@ from dal import users_dal
 # ─── BindOutcome enum (what the bind+active check resolved to) ────
 
 class BindOutcome:
+    """Enum of what the login bind + active check resolved to (see resolve_bind):
+    OK / MISS / DISABLED. MISS is deliberately identical for unknown user, wrong
+    ukey, or orphan client so the response never leaks which one failed."""
     OK       = "ok"        # bind matched and is_active=1
     MISS     = "miss"      # no row -- unknown user, wrong ukey, or
                            # orphan client. Same surface response for all

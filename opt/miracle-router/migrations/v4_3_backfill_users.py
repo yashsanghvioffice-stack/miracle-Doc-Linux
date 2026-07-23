@@ -36,16 +36,20 @@ UPDATE_SQL = "UPDATE users SET user_type = 'new' WHERE " + GUARD
 
 
 def die(msg, code=1):
+    """Print `msg` to stderr and exit with status `code`."""
     sys.stderr.write(msg + "\n")
     sys.exit(code)
 
 
 def has_column(conn, table, col):
+    """True if `table` currently has a column named `col`."""
     rows = conn.execute("PRAGMA table_info(%s)" % table).fetchall()
     return any(r[1] == col for r in rows)
 
 
 def main():
+    """CLI entry: safety-net backfill of users.user_type='new' on existing rows
+    (usually a no-op -- ADD COLUMN already filled the default). --dry-run previews."""
     dry_run = "--dry-run" in sys.argv
     if "--help" in sys.argv or "-h" in sys.argv:
         print(__doc__)

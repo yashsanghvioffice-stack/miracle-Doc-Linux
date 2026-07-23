@@ -19,6 +19,8 @@ from dal import rdp_tokens_dal
 # ─── TokenOutcome enum (the four states consume_token can return) ─
 
 class TokenOutcome:
+    """Enum of the four states consume_token can return: OK (valid + just-consumed),
+    NOT_FOUND, ALREADY_USED, or EXPIRED."""
     OK            = "ok"            # token valid + just-consumed; caller may serve .rdp
     NOT_FOUND     = "not_found"     # no such token in the DB
     ALREADY_USED  = "already_used"  # used_at is non-NULL

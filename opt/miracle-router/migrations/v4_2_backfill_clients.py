@@ -59,16 +59,20 @@ SAMPLE_SQL = """
 
 
 def die(msg, code=1):
+    """Print `msg` to stderr and exit with status `code`."""
     sys.stderr.write(msg + "\n")
     sys.exit(code)
 
 
 def has_column(conn, table, col):
+    """True if `table` currently has a column named `col`."""
     rows = conn.execute("PRAGMA table_info(%s)" % table).fetchall()
     return any(r[1] == col for r in rows)
 
 
 def main():
+    """CLI entry: fill-only backfill of clients.subscription_start/end on existing
+    rows (start=date(created_at), end=+1yr-1day). --dry-run previews. See module docstring."""
     dry_run = "--dry-run" in sys.argv
     if "--help" in sys.argv or "-h" in sys.argv:
         print(__doc__)

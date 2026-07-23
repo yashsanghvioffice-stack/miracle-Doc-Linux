@@ -462,6 +462,24 @@ else:
     FAIL += 1
     print(" [FAIL] expected NULL phone + email set, got %s" % body)
 
+# Partner email accepts multiple comma-separated addresses (v4.2): lowercased,
+# trimmed, de-duped (order kept), stored as "a@x.com,b@y.com".
+body = check("POST /admin/partners (multi email)",
+             hit("POST", "/admin/partners", headers=H,
+                 json={"name": "Multi Mail Partner",
+                       "email": "Sales@Acme.Example, support@acme.example , sales@acme.example"}),
+             201)
+if body.get("email") == "sales@acme.example,support@acme.example":
+    PASS += 1; print(" [PASS] partner multi-email normalized + de-duped")
+else:
+    FAIL += 1; print(" [FAIL] partner multi-email wrong: %s" % body.get("email"))
+
+# One bad address anywhere in the list rejects the whole value
+check("POST /admin/partners (multi email, one invalid)",
+      hit("POST", "/admin/partners", headers=H,
+          json={"name": "Multi Bad Partner", "email": "ok@x.com, not-an-email"}),
+      400, "VALIDATION_FAILED")
+
 # Duplicate name (case-insensitive) — email present so it reaches the DB check
 check("POST /admin/partners duplicate name (case-insensitive)",
       hit("POST", "/admin/partners", headers=H,

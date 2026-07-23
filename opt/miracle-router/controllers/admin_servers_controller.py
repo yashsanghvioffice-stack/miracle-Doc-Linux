@@ -26,6 +26,9 @@ bp = Blueprint("admin_servers", __name__, url_prefix="/admin/servers")
 @bp.route("", methods=["POST"])
 @require_api_key
 def server_create():
+    """POST /admin/servers -- register a TSplus host. Body: {server_name, server_ip}.
+    Returns 201 with the new row; 409 SERVER_NAME_EXISTS / SERVER_IP_EXISTS on a
+    duplicate name or IP. PS Setup's pre-flight auto-calls this for a new server."""
     data = parse_body()
     errors, cleaned = validate_server_payload(data, partial=False)
     if errors:
@@ -54,6 +57,7 @@ def server_create():
 @bp.route("", methods=["GET"])
 @require_api_key
 def server_list():
+    """GET /admin/servers -- every registered server as {servers, count}."""
     with db() as conn:
         rows = servers_dal.list_servers(conn)
     return jsonify({"servers": [dict(r) for r in rows], "count": len(rows)})
@@ -62,6 +66,7 @@ def server_list():
 @bp.route("/<int:server_id>", methods=["GET"])
 @require_api_key
 def server_get(server_id):
+    """GET /admin/servers/<id> -- one server row; 404 SERVER_NOT_FOUND on miss."""
     with db() as conn:
         row = servers_dal.get_server_by_id(conn, server_id)
     if not row:
@@ -73,6 +78,8 @@ def server_get(server_id):
 @bp.route("/<int:server_id>", methods=["PUT"])
 @require_api_key
 def server_update(server_id):
+    """PUT /admin/servers/<id> -- partial update of server_name/server_ip.
+    400 VALIDATION_FAILED / NO_FIELDS_TO_UPDATE; 404 if missing; 409 on clash."""
     data = parse_body()
     errors, cleaned = validate_server_payload(data, partial=True)
     if errors:
@@ -107,6 +114,8 @@ def server_update(server_id):
 @bp.route("/<int:server_id>", methods=["DELETE"])
 @require_api_key
 def server_delete(server_id):
+    """DELETE /admin/servers/<id> -- remove a server. Refuses with 409
+    CANNOT_DELETE_SERVER_WITH_USERS (+ user_count) while any user references it."""
     with db() as conn:
         if not servers_dal.server_id_exists(conn, server_id):
             return jsonify({"status": "error", "code": M.CODE_SERVER_NOT_FOUND,

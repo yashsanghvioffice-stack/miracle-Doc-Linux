@@ -32,6 +32,9 @@ bp = Blueprint("public", __name__)
 
 @bp.route("/health", methods=["GET"])
 def health():
+    """GET /health -- liveness probe. Returns {status:'ok', ...small DB snapshot}
+    when the DB is reachable, or an error status otherwise. Not API-key protected
+    and excluded from request logging."""
     try:
         with db() as conn:
             snap = stats_dal.health_snapshot(conn)

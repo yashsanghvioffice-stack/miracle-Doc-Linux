@@ -239,6 +239,7 @@ SCHEMA = [
 # ─── HELPERS ────────────────────────────────────────────────────
 
 def list_tables(conn):
+    """Set of table names currently present in the DB."""
     return {
         r[0] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'"
@@ -247,6 +248,7 @@ def list_tables(conn):
 
 
 def list_indexes(conn):
+    """Set of non-internal index names currently present in the DB."""
     return {
         r[0] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%'"
@@ -261,6 +263,7 @@ def list_columns(conn, table):
 
 
 def row_count(conn, table):
+    """Row count of `table`, or the string '?' if it can't be read."""
     try:
         return conn.execute("SELECT COUNT(*) FROM " + table).fetchone()[0]
     except sqlite3.Error:
@@ -279,6 +282,9 @@ def index_name(stmt):
 # ─── MAIN ───────────────────────────────────────────────────────
 
 def main():
+    """CLI entry: create/sync every table, column, and index (idempotent).
+    Flags: --dry-run (report only), --verify (exit 2 on drift), --help.
+    See the module docstring for the full behaviour + ALTER restrictions."""
     dry_run = "--dry-run" in sys.argv
     verify  = "--verify"  in sys.argv
 
