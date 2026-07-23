@@ -107,13 +107,16 @@ PARTNER_SEED = [
 # Customer-CSV partner names that are the SAME partner as a sheet entry under a
 # different label (reviewed + confirmed 2026-07). The CSV name is mapped to its
 # canonical sheet name so those customers link to the ONE partner row (no dup).
-#   'Gopal Hingu' == 'Ketan Gohel/ Gohel Hingu' (sheet's 2nd email gopalhingu2192@)
-#   'JB Infosoft' == 'Jaybhai'                   (sheet email jbinfosoft@)
-# ('Manish Pandya' is a genuine partner absent from the sheet -> created name-only
-#  by step 1b; give it an email later via PUT /admin/partners.)
+#   'Gopal Hingu'  == 'Ketan Gohel/ Gohel Hingu' (sheet's 2nd email gopalhingu2192@)
+#   'JB Infosoft'  == 'Jaybhai'                   (sheet email jbinfosoft@)
+#   'Harsh Lathia' == 'Harsh Lathiya'             (desktop-file spelling variant,
+#                                                  confirmed same partner 2026-07-23)
+# ('Manish Pandya' is a genuine partner absent from the sheet -> seeded name-only
+#  via EXTRA_PARTNERS; give it an email later via PUT /admin/partners.)
 PARTNER_ALIASES = {
-    "gopal hingu": "Ketan Gohel/ Gohel Hingu",
-    "jb infosoft": "Jaybhai",
+    "gopal hingu":  "Ketan Gohel/ Gohel Hingu",
+    "jb infosoft":  "Jaybhai",
+    "harsh lathia": "Harsh Lathiya",
 }
 
 # Partners approved for creation that are NOT in the sheet (reviewed additions).
@@ -175,6 +178,24 @@ CLIENT_PARTNER_MAP = [
     ('118158', 'Rajesh Karia'),
     ('118207', 'Gopal Hingu'),
     ('118262', 'Aslam Kondhiya'),
+    # Added 2026-07-23 from Miracle_On_Cloud_Desktop_Data.xlsx (Dealer Name).
+    # Dealer casing normalized to the master's canonical name (links NOCASE).
+    # 'Harsh Lathia' (29835, 47765) alias-resolves to master 'Harsh Lathiya'.
+    # (118312 Poptop / dealer 'Abhishek Bhimani' deliberately left unmapped ->
+    #  partner_id stays NULL, to be assigned later via the client edit API.)
+    ('5520',   'Shailesh Patel'),
+    ('29835',  'Harsh Lathia'),
+    ('42237',  'Ketan Marthak'),
+    ('47765',  'Harsh Lathia'),
+    ('93058',  'Shailesh Patel'),
+    ('102601', 'Mayank Shukla'),
+    ('103368', 'Rajesh Karia'),
+    ('109481', 'Mayank Shukla'),
+    ('118021', 'Ketan Marthak'),
+    ('118142', 'Shailesh Patel'),
+    ('118282', 'Rajesh Karia'),
+    ('118336', 'Mayank Shukla'),
+    ('118338', 'Mayank Shukla'),
 ]
 
 # ─── 3rd map: customer_id -> subscription start date (reviewed, from the team
@@ -229,6 +250,20 @@ CLIENT_START = {
     '118158': '2026-07-07',
     '118207': '2026-10-07',
     '118262': '2026-10-07',
+    # Added 2026-07-23 from Miracle_On_Cloud_Desktop_Data.xlsx (Date column).
+    '5520':   '2026-07-13',
+    '29835':  '2026-07-13',
+    '42237':  '2026-07-13',
+    '47765':  '2026-07-17',
+    '93058':  '2026-07-15',
+    '102601': '2026-07-14',
+    '103368': '2026-07-13',
+    '109481': '2026-10-07',
+    '118021': '2026-07-15',
+    '118142': '2026-10-07',
+    '118282': '2026-07-13',
+    '118336': '2026-07-14',
+    '118338': '2026-07-14',
 }
 
 REQUIRED = {
