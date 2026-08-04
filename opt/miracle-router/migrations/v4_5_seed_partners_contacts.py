@@ -24,13 +24,20 @@ For every client (matched by client_name = Customer ID):
     storage_gb         <- 5
     contact_email      <- the client's admin (lowest-id) user's email
     contact_mobile     <- the client's admin (lowest-id) user's mobile
-For every user of that client:
-    start_date         <- the same start basis
-    user_type          <- 'new'
+For every user of that client (EVENT-BASED):
+    user_type          <- 'new' for users created on/before the client's start
+                          date (its first provisioning event); 'additional' for
+                          users created on a LATER date (a subsequent purchase).
+    start_date         <- 'new' users: the client start date. 'additional'
+                          users: their own creation date (when the seat began).
 
 SAFETY (this is live data):
-    * FILL-ONLY: every write is guarded `WHERE <col> IS NULL` -- it never
-      overwrites a value already set. Idempotent (2nd run changes nothing).
+    * FILL-ONLY for every column EXCEPT user_type: each such write is guarded
+      `WHERE <col> IS NULL`, never overwriting a value already set.
+    * user_type carries the schema default 'new' on all existing rows, so
+      'additional' is WRITTEN (an overwrite of that default). The write only
+      ever flips a row that is NOT already 'additional' -- it never reverts an
+      'additional' back to 'new'. Still fully idempotent (2nd run = no change).
     * users.email / users.mobile are NEVER touched.
     * No rows inserted/deleted in clients or users (partners may gain rows).
     * One IMMEDIATE transaction; --dry-run writes nothing; built-in verify.
@@ -196,6 +203,30 @@ CLIENT_PARTNER_MAP = [
     ('118282', 'Rajesh Karia'),
     ('118336', 'Mayank Shukla'),
     ('118338', 'Mayank Shukla'),
+    # Added 2026-07-27 from the UPDATED Miracle_On_Cloud_Desktop_Data.xlsx.
+    # All resolve to existing master partners (JB Infosoft -> Jaybhai via alias).
+    # 118648's dealer reads 'Maynak Shukla' in the file -- a typo for the
+    # existing partner 'Mayank Shukla' (no 'Maynak' exists) -> corrected here.
+    # (118312 Poptop / 'Abhishek Bhimani' still unmapped -> partner_id NULL.)
+    ('4574',   'RKS Office'),
+    ('38646',  'Ali Hathiyari'),
+    ('45997',  'Nilesh Patel'),
+    ('46266',  'Mayank Shukla'),
+    ('50246',  'Manjit Zala'),
+    ('52710',  'Mayank Shukla'),
+    ('86553',  'Perfect Infosys'),
+    ('98560',  'Ketan Marthak'),
+    ('99077',  'Aslam Kondhiya'),
+    ('105598', 'Punit Daxini'),
+    ('106762', 'JB Infosoft'),
+    ('109886', 'Hitesh Chavda'),
+    ('113482', 'JB Infosoft'),
+    ('117732', 'Mayank Shukla'),
+    ('118162', 'Rajesh Karia'),
+    ('118505', 'Perfect Infosys'),
+    ('118588', 'JB Infosoft'),
+    ('118617', 'Manish Pandya'),
+    ('118648', 'Mayank Shukla'),   # file typo 'Maynak Shukla' -> corrected
 ]
 
 # ─── 3rd map: customer_id -> subscription start date (reviewed, from the team
@@ -264,6 +295,26 @@ CLIENT_START = {
     '118282': '2026-07-13',
     '118336': '2026-07-14',
     '118338': '2026-07-14',
+    # Added 2026-07-27 from the UPDATED Miracle_On_Cloud_Desktop_Data.xlsx.
+    '4574':   '2026-07-24',
+    '38646':  '2026-07-20',
+    '45997':  '2026-07-27',
+    '46266':  '2026-07-23',
+    '50246':  '2026-07-27',
+    '52710':  '2026-07-20',
+    '86553':  '2026-07-21',   # FIRST of 3 events (07-21/23/25); later = additional
+    '98560':  '2026-07-27',
+    '99077':  '2026-07-27',
+    '105598': '2026-07-20',
+    '106762': '2026-07-27',
+    '109886': '2026-07-21',
+    '113482': '2026-07-20',
+    '117732': '2026-07-20',
+    '118162': '2026-07-22',
+    '118505': '2026-07-21',
+    '118588': '2026-07-27',
+    '118617': '2026-07-27',
+    '118648': '2026-07-27',
 }
 
 REQUIRED = {
@@ -336,21 +387,42 @@ def main():
             cid = str(c["client_name"]).strip()
             in_seed = cid in CLIENT_START
             start = CLIENT_START.get(cid) or c["cd"]  # test accounts -> created date
-            nusers = conn.execute(
-                "SELECT COUNT(*) FROM users WHERE client_name=? COLLATE NOCASE", (cid,)
-            ).fetchone()[0]
+            urows = conn.execute(
+                "SELECT id, email, mobile, date(created_at) cd FROM users "
+                "WHERE client_name=? COLLATE NOCASE ORDER BY id", (cid,)
+            ).fetchall()
+            nusers = len(urows)
             sub_type = "multi" if nusers > 1 else "single"
-            admin = conn.execute(
-                "SELECT email, mobile FROM users WHERE client_name=? COLLATE NOCASE "
-                "ORDER BY id LIMIT 1", (cid,)
-            ).fetchone()
+            admin = urows[0] if urows else None       # lowest id = account admin
+
+            # EVENT-BASED user classification. The client's FIRST provisioning
+            # event = its start date (CLIENT_START); users created on/before it
+            # are 'new'. Users created on a LATER date were added in a later
+            # purchase event -> 'additional', dated by their own creation date.
+            # `anchor` normally = the client start date, but falls back to the
+            # earliest actual user-creation date when the file start predates
+            # every user row (guarantees at least one 'new' user).
+            users_plan = []
+            if urows:
+                earliest = min((u["cd"] or "") for u in urows)
+                base = start if in_seed else None
+                anchor = base if (base and base >= earliest) else earliest
+                new_start = base or earliest
+                for u in urows:
+                    cd = u["cd"] or ""
+                    if cd > anchor:
+                        users_plan.append((u["id"], "additional", cd))
+                    else:
+                        users_plan.append((u["id"], "new", new_start))
+
             plan.append({
                 "id": c["id"], "cid": cid, "partner": partner_by_cid.get(cid),
                 "start": start, "end": expiry_from(start),
                 "sub_type": sub_type, "storage": STORAGE_GB,
                 "email": admin["email"] if admin else None,
                 "mobile": admin["mobile"] if admin else None,
-                "in_seed": in_seed,
+                "in_seed": in_seed, "users": users_plan,
+                "n_additional": sum(1 for _, t, _ in users_plan if t == "additional"),
             })
 
         # Map/array customer_ids with no matching client row: the migration
@@ -379,7 +451,13 @@ def main():
             print("Would link customers->partner: %d of %d (FK set)"
                   % (len(CLIENT_PARTNER_MAP) - len(dry_unmatched), len(CLIENT_PARTNER_MAP)))
             print("Would set fields on        :", len(plan), "clients")
-            print("Would set start_date/user_type on all users where NULL.")
+            n_add = sum(p["n_additional"] for p in plan)
+            add_clients = [p for p in plan if p["n_additional"]]
+            print("Would set start_date on all users (fill-only).")
+            print("Would mark %d user(s) as 'additional' across %d client(s)."
+                  % (n_add, len(add_clients)))
+            for p in add_clients:
+                print("   customer %-8s additional users: %d" % (p["cid"], p["n_additional"]))
             if dry_unmatched:
                 print("UNMATCHED partner names (partner_id would stay NULL):")
                 for cid, pn in dry_unmatched:
@@ -450,13 +528,20 @@ def main():
             if p["mobile"]:
                 conn.execute("UPDATE clients SET contact_mobile=? WHERE id=? AND contact_mobile IS NULL",
                              (p["mobile"], p["id"]))
-            # users of this client
-            conn.execute("UPDATE users SET start_date=? "
-                         "WHERE client_name=? COLLATE NOCASE AND start_date IS NULL",
-                         (p["start"], p["cid"]))
-            conn.execute("UPDATE users SET user_type='new' "
-                         "WHERE client_name=? COLLATE NOCASE AND (user_type IS NULL OR TRIM(user_type)='')",
-                         (p["cid"],))
+            # users of this client -- event-based (see plan build).
+            #   start_date : FILL-ONLY (column is nullable) -- 'new' users get
+            #                the client start date, 'additional' get their own
+            #                creation date.
+            #   user_type  : every row carries the schema default 'new', so
+            #                'additional' must be WRITTEN. We only ever flip a
+            #                row that is NOT already 'additional' -> idempotent,
+            #                never reverts an existing 'additional' to 'new'.
+            for uid, ut, sd in p["users"]:
+                conn.execute("UPDATE users SET start_date=? WHERE id=? AND start_date IS NULL",
+                             (sd, uid))
+                if ut == "additional":
+                    conn.execute("UPDATE users SET user_type='additional' "
+                                 "WHERE id=? AND user_type<>'additional'", (uid,))
 
         conn.execute("COMMIT")
 
@@ -502,6 +587,17 @@ def main():
                   % (len(absent_from_db), ", ".join(absent_from_db)))
         chk("users missing start_date", conn.execute("SELECT COUNT(*) FROM users WHERE start_date IS NULL").fetchone()[0], 0)
         chk("users missing user_type", conn.execute("SELECT COUNT(*) FROM users WHERE user_type IS NULL OR TRIM(user_type)=''").fetchone()[0], 0)
+        # Event-based user_type: DB 'additional' count must match what we planned,
+        # and every 'additional' user must carry a start_date > its client start.
+        planned_add = sum(p["n_additional"] for p in plan)
+        db_add = conn.execute("SELECT COUNT(*) FROM users WHERE user_type='additional'").fetchone()[0]
+        chk("additional users match plan", db_add, planned_add)
+        if planned_add:
+            print("  additional users by client:")
+            for p in plan:
+                if p["n_additional"]:
+                    print("      customer %-8s new=%d additional=%d"
+                          % (p["cid"], len(p["users"]) - p["n_additional"], p["n_additional"]))
         integ = conn.execute("PRAGMA integrity_check").fetchone()[0]
         chk("PRAGMA integrity_check", integ, "ok")
 
