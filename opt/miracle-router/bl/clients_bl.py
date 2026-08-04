@@ -12,8 +12,10 @@ from datetime import date, timedelta
 
 import messages as M
 from config import (
-    CLIENT_NAME_RE, UKEY_RE, DATE_RE, SUBSCRIPTION_TYPES, EMAIL_RE, MOBILE_RE,
+    CLIENT_NAME_RE, UKEY_RE, DATE_RE, SUBSCRIPTION_TYPES,
+    today_ist,
 )
+from bl.validators import parse_email_list, normalize_mobile
 
 
 DISPLAY_NAME_MAX = 128
@@ -123,26 +125,17 @@ def _apply_optional_client_fields(data, cleaned):
     # normalized "a@x.com,b@y.com" string (no spaces).
     if "contact_email" in data and data["contact_email"] is not None \
             and str(data["contact_email"]).strip() != "":
-        seen, emails = set(), []
-        for part in str(data["contact_email"]).split(","):
-            e = part.strip().lower()
-            if not e:
-                continue                       # tolerate stray/trailing commas
-            if not EMAIL_RE.match(e) or len(e) > 254:
-                return M.MSG_INVALID_CONTACT_EMAIL
-            if e not in seen:
-                seen.add(e)
-                emails.append(e)
-        if not emails:
-            return M.MSG_INVALID_CONTACT_EMAIL
-        if len(emails) > CONTACT_EMAIL_MAX_COUNT:
+        status, value = parse_email_list(data["contact_email"], CONTACT_EMAIL_MAX_COUNT)
+        if status == "too_many":
             return M.MSG_TOO_MANY_CONTACT_EMAILS
-        cleaned["contact_email"] = ",".join(emails)
+        if status == "invalid":
+            return M.MSG_INVALID_CONTACT_EMAIL
+        cleaned["contact_email"] = value
 
     if "contact_mobile" in data and data["contact_mobile"] is not None \
             and str(data["contact_mobile"]).strip() != "":
-        m = str(data["contact_mobile"]).strip().replace(" ", "").replace("-", "")
-        if not MOBILE_RE.match(m):
+        ok, m = normalize_mobile(data["contact_mobile"])
+        if not ok:
             return M.MSG_INVALID_CONTACT_MOBILE
         cleaned["contact_mobile"] = m
 
@@ -165,7 +158,7 @@ def apply_subscription_rules(cleaned, is_create):
     """
     if is_create:
         if "subscription_end" not in cleaned:
-            base = cleaned.get("subscription_start") or date.today().isoformat()
+            base = cleaned.get("subscription_start") or today_ist()
             cleaned["subscription_end"] = add_one_year_minus_one_day(base)
     else:
         if "subscription_start" in cleaned and "subscription_end" not in cleaned:

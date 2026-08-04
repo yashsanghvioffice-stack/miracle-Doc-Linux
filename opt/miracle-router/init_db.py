@@ -38,8 +38,15 @@ import os
 import sqlite3
 import sys
 
+import config
+
 DB_PATH = os.environ.get("MIRACLE_DB_PATH", "/etc/miracle-registry/miracle.db")
 DB_DIR  = os.path.dirname(DB_PATH)
+
+# Fresh-DB default for timestamp columns. The UTC->IST offset lives only in
+# config (DRY); the CREATE statements below carry the __TS_DEFAULT__ sentinel,
+# substituted once just after SCHEMA is defined.
+TS_IST_DEFAULT = "DEFAULT (%s)" % config.SQL_NOW_IST
 
 
 # ─── SCHEMA ─────────────────────────────────────────────────────
@@ -59,7 +66,7 @@ SCHEMA = [
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
                 server_name  TEXT    NOT NULL UNIQUE COLLATE NOCASE,
                 server_ip    TEXT    NOT NULL UNIQUE,
-                created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_at   TIMESTAMP __TS_DEFAULT__,
                 updated_at   TIMESTAMP
             )
         """,
@@ -81,7 +88,7 @@ SCHEMA = [
                 is_active    INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0,1)),
                 user_type    TEXT    NOT NULL DEFAULT 'new' CHECK(user_type IN ('new','additional')),
                 start_date   DATE,
-                created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_at   TIMESTAMP __TS_DEFAULT__,
                 updated_at   TIMESTAMP,
                 FOREIGN KEY (server_id) REFERENCES server_master(id)
             )
@@ -91,14 +98,16 @@ SCHEMA = [
             "mobile":     "TEXT NOT NULL DEFAULT ''",
             "is_active":  "INTEGER NOT NULL DEFAULT 1",
             # user_type added in Phase 2. NOT NULL DEFAULT 'new' means the
-            # ALTER auto-fills every existing row with 'new' -- so the
-            # v4_3_backfill_users.py migration is a safety no-op. CHECK is
+            # ALTER auto-fills every existing row with 'new'; the v4_5 seed
+            # migration later re-classifies later-created users to 'additional'
+            # (event-based). CHECK is
             # omitted here (ADD COLUMN keeps it simple; the enum is
             # enforced at the BL layer). Fresh DBs get the CHECK via CREATE.
             "user_type":  "TEXT NOT NULL DEFAULT 'new'",
-            # start_date (v4.1a) = per-user subscription/purchase start
-            # (= creation date). Nullable; existing rows backfilled to
-            # date(created_at) by migrations/v4_4_backfill_user_start.py.
+            # start_date (v4.1a) = per-user subscription/purchase start.
+            # Nullable; existing rows backfilled by the v4_5 seed migration
+            # (event-based: client start date for 'new', own created_at for
+            # 'additional').
             "start_date": "DATE",
             "updated_at": "TIMESTAMP",
         },
@@ -136,7 +145,7 @@ SCHEMA = [
                 email        TEXT,
                 phone        TEXT,
                 is_active    INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0,1)),
-                created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_at   TIMESTAMP __TS_DEFAULT__,
                 updated_at   TIMESTAMP
             )
         """,
@@ -165,7 +174,7 @@ SCHEMA = [
                 subscription_end   DATE,
                 contact_email      TEXT,
                 contact_mobile     TEXT,
-                created_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_at         TIMESTAMP __TS_DEFAULT__,
                 CHECK(length(ukey) = 8)
             )
         """,
@@ -175,8 +184,8 @@ SCHEMA = [
             # referencing clients. Phase 2 activates it (writable via
             # POST/PUT) and adds the subscription date columns. All three
             # are nullable -- existing rows are populated by the one-shot
-            # migrations/v4_2_backfill_clients.py (SQLite ADD COLUMN can't
-            # take a date(created_at) default expression).
+            # v4_5 seed migration (SQLite ADD COLUMN can't take a
+            # date(created_at) default expression).
             "partner_id":         "INTEGER",
             # subscription_type ('single'|'multi') + storage_gb (total shared
             # HARD quota) added in v4.1a. Nullable; enum enforced at BL. No
@@ -204,7 +213,7 @@ SCHEMA = [
         "create": """
             CREATE TABLE IF NOT EXISTS request_log (
                 id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                ts            TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                ts            TIMESTAMP NOT NULL __TS_DEFAULT__,
                 method        TEXT NOT NULL,
                 path          TEXT NOT NULL,
                 status        INTEGER,
@@ -234,6 +243,11 @@ SCHEMA = [
         ],
     },
 ]
+
+# Substitute the timestamp-default sentinel with the IST default from config
+# (single source of truth -- see TS_IST_DEFAULT above).
+for _entry in SCHEMA:
+    _entry["create"] = _entry["create"].replace("__TS_DEFAULT__", TS_IST_DEFAULT)
 
 
 # ─── HELPERS ────────────────────────────────────────────────────

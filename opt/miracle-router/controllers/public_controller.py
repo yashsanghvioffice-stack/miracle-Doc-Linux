@@ -8,6 +8,7 @@ Public endpoints (no API key required):
 import sqlite3
 
 from flask import Blueprint, jsonify, make_response, redirect, request
+from responses import error
 
 import messages as M
 from config import (
@@ -43,10 +44,7 @@ def health():
         return jsonify(payload)
     except Exception as e:
         # /health is for ops monitoring -- still returns the v3.4 contract.
-        return jsonify({"status":  "error",
-                        "code":    "HEALTH_CHECK_FAILED",
-                        "message": "Health check failed",
-                        "detail":  str(e)}), 500
+        return error("HEALTH_CHECK_FAILED", "Health check failed", 500, detail=str(e))
 
 
 # ─── /login ───────────────────────────────────────────────────────
@@ -89,22 +87,17 @@ def login():
         preference = 'html5'
 
     if not username:
-        return jsonify({"status": "error", "code": M.CODE_MISSING_FIELDS,
-                        "message": M.MSG_USERNAME_REQUIRED}), 400
+        return error(M.CODE_MISSING_FIELDS, M.MSG_USERNAME_REQUIRED, 400)
     if not USERNAME_RE.match(username):
-        return jsonify({"status": "error", "code": M.CODE_INVALID_USERNAME,
-                        "message": M.MSG_INVALID_USERNAME}), 400
+        return error(M.CODE_INVALID_USERNAME, M.MSG_INVALID_USERNAME, 400)
     if not password:
-        return jsonify({"status": "error", "code": M.CODE_MISSING_FIELDS,
-                        "message": M.MSG_PASSWORD_REQUIRED}), 400
+        return error(M.CODE_MISSING_FIELDS, M.MSG_PASSWORD_REQUIRED, 400)
     if not ukey:
-        return jsonify({"status": "error", "code": M.CODE_MISSING_UKEY,
-                        "message": M.MSG_MISSING_UKEY}), 400
+        return error(M.CODE_MISSING_UKEY, M.MSG_MISSING_UKEY, 400)
     if not UKEY_RE.match(ukey):
         log.warning("Login: bad ukey format for '%s' from %s",
                     username, request.remote_addr)
-        return jsonify({"status": "error", "code": M.CODE_INVALID_UKEY,
-                        "message": M.MSG_INVALID_UKEY}), 400
+        return error(M.CODE_INVALID_UKEY, M.MSG_INVALID_UKEY, 400)
 
     # 1. SQLite strict bind + is_active check (BL: auth_bl)
     with db() as conn:
@@ -113,13 +106,11 @@ def login():
     if bind == BindOutcome.MISS:
         log.warning("Login bind MISS: user='%s' ukey=%s from %s",
                     username, ukey, request.remote_addr)
-        return jsonify({"status": "error", "code": M.CODE_INVALID_CREDENTIALS,
-                        "message": M.MSG_INVALID_CREDENTIALS}), 401
+        return error(M.CODE_INVALID_CREDENTIALS, M.MSG_INVALID_CREDENTIALS, 401)
 
     if bind == BindOutcome.DISABLED:
         log.warning("Login rejected: disabled account '%s'", username)
-        return jsonify({"status": "error", "code": M.CODE_ACCOUNT_DISABLED,
-                        "message": M.MSG_ACCOUNT_DISABLED}), 403
+        return error(M.CODE_ACCOUNT_DISABLED, M.MSG_ACCOUNT_DISABLED, 403)
 
     ip = row["server_ip"]
 
@@ -128,16 +119,13 @@ def login():
         ts = tsplus_bl.authenticate(ip, username, password)
     except TSplusUnreachable:
         log.error("TSplus unreachable: %s", ip)
-        return jsonify({"status": "error", "code": M.CODE_BACKEND_UNAVAILABLE,
-                        "message": M.MSG_TSPLUS_UNREACHABLE}), 503
+        return error(M.CODE_BACKEND_UNAVAILABLE, M.MSG_TSPLUS_UNREACHABLE, 503)
     except TSplusTimeout:
         log.error("TSplus timeout: %s", ip)
-        return jsonify({"status": "error", "code": M.CODE_BACKEND_UNAVAILABLE,
-                        "message": M.MSG_TSPLUS_TIMEOUT}), 503
+        return error(M.CODE_BACKEND_UNAVAILABLE, M.MSG_TSPLUS_TIMEOUT, 503)
     except TSplusError as e:
         log.error("TSplus auth exception for '%s': %s", username, str(e))
-        return jsonify({"status": "error", "code": M.CODE_INVALID_CREDENTIALS,
-                        "message": M.MSG_AUTH_FAILED}), 500
+        return error(M.CODE_INVALID_CREDENTIALS, M.MSG_AUTH_FAILED, 500)
 
     log.info("TSplus response for '%s' (pref=%s): status=%s body=%s",
              username, preference, ts.status_code, ts.body[:200])
@@ -145,8 +133,7 @@ def login():
     if not ts.ok:
         log.warning("TSplus rejected credentials for '%s' -> %s (body: %s)",
                     username, ip, ts.body[:100])
-        return jsonify({"status": "error", "code": M.CODE_INVALID_CREDENTIALS,
-                        "message": M.MSG_INVALID_PASSWORD}), 401
+        return error(M.CODE_INVALID_CREDENTIALS, M.MSG_INVALID_PASSWORD, 401)
 
     cookies = ts.cookies   # echoed on the response below (all 16 TSplus cookies)
 
@@ -166,8 +153,7 @@ def login():
             log.info("RDP token issued: user=%s server=%s", username, ip)
         except sqlite3.Error as e:
             log.error("Failed to issue RDP token for '%s': %s", username, e)
-            return jsonify({"status": "error", "code": M.CODE_TOKEN_ISSUE_FAILED,
-                            "message": M.MSG_TOKEN_ISSUE_FAILED}), 500
+            return error(M.CODE_TOKEN_ISSUE_FAILED, M.MSG_TOKEN_ISSUE_FAILED, 500)
 
         response_payload["redirect"] = REDIRECT_REMOTE
         response_payload["rdp_url"]  = "/rdp/download/{}".format(token)

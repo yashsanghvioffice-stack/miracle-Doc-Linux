@@ -15,11 +15,12 @@ needs them.
 
 from functools import wraps
 
-from flask import jsonify, request
+from flask import request
 
 import messages as M
 from config import API_KEY
 from logger import log
+from responses import error
 
 
 def require_api_key(fn):
@@ -35,13 +36,9 @@ def require_api_key(fn):
         provided = request.headers.get("X-API-Key", "")
         if not API_KEY:
             log.error("MIRACLE_API_KEY env var not set -- refusing all admin requests.")
-            return jsonify({"status": "error",
-                            "code":    M.CODE_SERVER_MISCONFIGURED,
-                            "message": M.MSG_SERVER_MISCONFIGURED}), 500
+            return error(M.CODE_SERVER_MISCONFIGURED, M.MSG_SERVER_MISCONFIGURED, 500)
         if provided != API_KEY:
-            return jsonify({"status": "error",
-                            "code":    M.CODE_INVALID_API_KEY,
-                            "message": M.MSG_INVALID_API_KEY}), 401
+            return error(M.CODE_INVALID_API_KEY, M.MSG_INVALID_API_KEY, 401)
         return fn(*args, **kwargs)
     return wrapper
 

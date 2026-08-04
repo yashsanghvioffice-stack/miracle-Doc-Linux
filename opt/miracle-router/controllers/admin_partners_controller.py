@@ -16,6 +16,7 @@ for how clients bind to a partner.
 import sqlite3
 
 from flask import Blueprint, jsonify, request
+from responses import error
 
 import messages as M
 from logger import log
@@ -39,8 +40,7 @@ def partner_create():
     data = parse_body()
     errors, cleaned = validate_partner_create_payload(data)
     if errors:
-        return jsonify({"status": "error", "code": M.CODE_VALIDATION_FAILED,
-                        "message": errors[0]}), 400
+        return error(M.CODE_VALIDATION_FAILED, errors[0], 400)
 
     name  = cleaned["name"]
     email = cleaned.get("email")
@@ -53,12 +53,7 @@ def partner_create():
         # Only unique constraint on partners is `name`
         with db() as conn:
             existing = partners_dal.get_partner_by_name(conn, name)
-        return jsonify({
-            "status":      "error",
-            "code":        M.CODE_PARTNER_NAME_EXISTS,
-            "message":     M.MSG_PARTNER_NAME_EXISTS,
-            "existing_id": existing["id"] if existing else None,
-        }), 409
+        return error(M.CODE_PARTNER_NAME_EXISTS, M.MSG_PARTNER_NAME_EXISTS, 409, existing_id=existing["id"] if existing else None)
 
     log.info("Partner created: id=%s name=%s", row["id"], name)
     return jsonify(dict(row)), 201
@@ -82,8 +77,7 @@ def partner_get(partner_id):
     with db() as conn:
         row = partners_dal.get_partner_by_id(conn, partner_id)
     if not row:
-        return jsonify({"status": "error", "code": M.CODE_PARTNER_NOT_FOUND,
-                        "message": M.MSG_PARTNER_NOT_FOUND}), 404
+        return error(M.CODE_PARTNER_NOT_FOUND, M.MSG_PARTNER_NOT_FOUND, 404)
     return jsonify(dict(row))
 
 
@@ -96,22 +90,18 @@ def partner_update(partner_id):
     data = parse_body()
     errors, cleaned = validate_partner_update_payload(data)
     if errors:
-        return jsonify({"status": "error", "code": M.CODE_VALIDATION_FAILED,
-                        "message": errors[0]}), 400
+        return error(M.CODE_VALIDATION_FAILED, errors[0], 400)
     if not cleaned:
-        return jsonify({"status": "error", "code": M.CODE_NO_FIELDS_TO_UPDATE,
-                        "message": M.MSG_NO_FIELDS_TO_UPDATE}), 400
+        return error(M.CODE_NO_FIELDS_TO_UPDATE, M.MSG_NO_FIELDS_TO_UPDATE, 400)
 
     with db() as conn:
         if not partners_dal.get_partner_by_id(conn, partner_id):
-            return jsonify({"status": "error", "code": M.CODE_PARTNER_NOT_FOUND,
-                            "message": M.MSG_PARTNER_NOT_FOUND}), 404
+            return error(M.CODE_PARTNER_NOT_FOUND, M.MSG_PARTNER_NOT_FOUND, 404)
 
         try:
             row = partners_dal.update_partner(conn, partner_id, cleaned)
         except sqlite3.IntegrityError:
-            return jsonify({"status": "error", "code": M.CODE_PARTNER_NAME_EXISTS,
-                            "message": M.MSG_PARTNER_NAME_EXISTS}), 409
+            return error(M.CODE_PARTNER_NAME_EXISTS, M.MSG_PARTNER_NAME_EXISTS, 409)
 
     log.info("Partner updated: id=%s fields=%s", partner_id, list(cleaned.keys()))
     return jsonify(dict(row))
@@ -128,8 +118,7 @@ def partner_delete(partner_id):
     with db() as conn:
         row = partners_dal.get_partner_by_id(conn, partner_id)
         if not row:
-            return jsonify({"status": "error", "code": M.CODE_PARTNER_NOT_FOUND,
-                            "message": M.MSG_PARTNER_NOT_FOUND}), 404
+            return error(M.CODE_PARTNER_NOT_FOUND, M.MSG_PARTNER_NOT_FOUND, 404)
 
         n = partners_dal.count_clients_for_partner(conn, partner_id)
         if n > 0:

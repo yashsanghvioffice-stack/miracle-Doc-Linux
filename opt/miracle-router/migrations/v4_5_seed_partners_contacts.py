@@ -376,8 +376,16 @@ def main():
                 if not has_column(conn, tbl, col):
                     die("ERROR: %s.%s missing. Run init_db.py first." % (tbl, col), 2)
 
+        # created_at is UTC until the v4_6 backfill flips PRAGMA user_version to
+        # 1 (= timestamps are IST). If that hasn't run yet, shift created_at to
+        # IST here for date-based user classification / test-account start dates,
+        # so results match the IST business dates in CLIENT_START regardless of
+        # the order v4_5 and v4_6 are run in.
+        uv = conn.execute("PRAGMA user_version").fetchone()[0]
+        cd_ist = "date(created_at)" if uv >= 1 else "date(created_at, '+5 hours', '+30 minutes')"
+
         clients = conn.execute(
-            "SELECT id, client_name, date(created_at) cd FROM clients ORDER BY id"
+            "SELECT id, client_name, %s cd FROM clients ORDER BY id" % cd_ist
         ).fetchall()
 
         # Plan per client (compute, don't write yet).
@@ -388,8 +396,8 @@ def main():
             in_seed = cid in CLIENT_START
             start = CLIENT_START.get(cid) or c["cd"]  # test accounts -> created date
             urows = conn.execute(
-                "SELECT id, email, mobile, date(created_at) cd FROM users "
-                "WHERE client_name=? COLLATE NOCASE ORDER BY id", (cid,)
+                "SELECT id, email, mobile, %s cd FROM users "
+                "WHERE client_name=? COLLATE NOCASE ORDER BY id" % cd_ist, (cid,)
             ).fetchall()
             nusers = len(urows)
             sub_type = "multi" if nusers > 1 else "single"

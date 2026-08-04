@@ -6,18 +6,22 @@ caller composes the JSON response shape (BL/controller responsibility).
 """
 
 
+def _scalar(conn, sql):
+    """Run a single-value query and return that value (the `.fetchone()[0]`
+    boilerplate, in one place)."""
+    return conn.execute(sql).fetchone()[0]
+
+
 def health_snapshot(conn):
     """Counts for the /health endpoint.
 
     Returns dict with keys: users, active, servers, total_clients, pending_rdp_tokens.
     """
-    users    = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-    active   = conn.execute("SELECT COUNT(*) FROM users WHERE is_active=1").fetchone()[0]
-    srvs     = conn.execute("SELECT COUNT(*) FROM server_master").fetchone()[0]
-    clients_count = conn.execute("SELECT COUNT(*) FROM clients").fetchone()[0]
-    tokens   = conn.execute(
-        "SELECT COUNT(*) FROM rdp_download_tokens WHERE used_at IS NULL"
-    ).fetchone()[0]
+    users    = _scalar(conn, "SELECT COUNT(*) FROM users")
+    active   = _scalar(conn, "SELECT COUNT(*) FROM users WHERE is_active=1")
+    srvs     = _scalar(conn, "SELECT COUNT(*) FROM server_master")
+    clients_count = _scalar(conn, "SELECT COUNT(*) FROM clients")
+    tokens   = _scalar(conn, "SELECT COUNT(*) FROM rdp_download_tokens WHERE used_at IS NULL")
     return {
         "users":               users,
         "active":              active,
@@ -32,17 +36,13 @@ def admin_stats_snapshot(conn):
 
     Returns dict with all counts + a `per_server` list of Rows.
     """
-    total    = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-    active   = conn.execute("SELECT COUNT(*) FROM users WHERE is_active=1").fetchone()[0]
-    srvs     = conn.execute("SELECT COUNT(*) FROM server_master").fetchone()[0]
-    clients_count = conn.execute("SELECT COUNT(*) FROM clients").fetchone()[0]
-    clients_dist  = conn.execute("SELECT COUNT(DISTINCT client_name) FROM users").fetchone()[0]
-    pending  = conn.execute(
-        "SELECT COUNT(*) FROM rdp_download_tokens WHERE used_at IS NULL"
-    ).fetchone()[0]
-    consumed = conn.execute(
-        "SELECT COUNT(*) FROM rdp_download_tokens WHERE used_at IS NOT NULL"
-    ).fetchone()[0]
+    total    = _scalar(conn, "SELECT COUNT(*) FROM users")
+    active   = _scalar(conn, "SELECT COUNT(*) FROM users WHERE is_active=1")
+    srvs     = _scalar(conn, "SELECT COUNT(*) FROM server_master")
+    clients_count = _scalar(conn, "SELECT COUNT(*) FROM clients")
+    clients_dist  = _scalar(conn, "SELECT COUNT(DISTINCT client_name) FROM users")
+    pending  = _scalar(conn, "SELECT COUNT(*) FROM rdp_download_tokens WHERE used_at IS NULL")
+    consumed = _scalar(conn, "SELECT COUNT(*) FROM rdp_download_tokens WHERE used_at IS NOT NULL")
     per_srv  = conn.execute("""
         SELECT s.id, s.server_name, s.server_ip,
                COUNT(u.id) AS user_count

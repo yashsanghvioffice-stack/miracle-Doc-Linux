@@ -6,6 +6,9 @@ on UNIQUE constraint violations -- caller distinguishes server_name vs
 server_ip clashes from the exception message.
 """
 
+from config import SQL_NOW_IST
+from dal.connection import apply_update
+
 
 def list_servers(conn):
     """All servers, ordered by id, each with a user_count subquery."""
@@ -35,7 +38,8 @@ def create_server(conn, server_name, server_ip):
     """Insert and return the new row. Raises sqlite3.IntegrityError on
     duplicate server_name or server_ip."""
     cur = conn.execute(
-        "INSERT INTO server_master (server_name, server_ip) VALUES (?, ?)",
+        "INSERT INTO server_master (server_name, server_ip, created_at) "
+        "VALUES (?, ?, " + SQL_NOW_IST + ")",
         (server_name, server_ip),
     )
     new_id = cur.lastrowid
@@ -50,12 +54,7 @@ def update_server(conn, server_id, fields):
     `fields` is a dict of column->value pairs already validated by the caller.
     Returns the post-update row. Raises sqlite3.IntegrityError on conflicts.
     """
-    sets   = ", ".join("{} = ?".format(k) for k in fields.keys())
-    params = list(fields.values()) + [server_id]
-    conn.execute(
-        "UPDATE server_master SET {}, updated_at = datetime('now') WHERE id = ?".format(sets),
-        params,
-    )
+    apply_update(conn, "server_master", fields, server_id)
     return conn.execute(
         "SELECT * FROM server_master WHERE id = ?", (server_id,)
     ).fetchone()

@@ -25,7 +25,7 @@ import sys
 from contextlib import contextmanager
 
 import messages as M
-from config import DB_PATH, REQUIRED_TABLES
+from config import DB_PATH, REQUIRED_TABLES, SQL_NOW_IST
 from logger import log
 
 
@@ -50,6 +50,22 @@ def db():
         raise
     finally:
         conn.close()
+
+
+def apply_update(conn, table, fields, row_id, id_col="id"):
+    """Run a dynamic `UPDATE <table> SET <cols>, updated_at=<IST> WHERE <id_col>=?`.
+
+    `fields` is a {column: value} dict of already-validated columns; the caller
+    rejects empty/no-op updates upstream (so `fields` is never empty). Column
+    names come from a controlled, BL-validated set -- never raw user input.
+    Bumps `updated_at` to IST. Shared by the users / servers / partners DALs so
+    the SET-clause + updated_at handling lives in one place.
+    """
+    sets = ", ".join("%s = ?" % col for col in fields)
+    conn.execute(
+        "UPDATE %s SET %s, updated_at = %s WHERE %s = ?" % (table, sets, SQL_NOW_IST, id_col),
+        list(fields.values()) + [row_id],
+    )
 
 
 def verify_schema():

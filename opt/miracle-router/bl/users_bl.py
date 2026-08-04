@@ -22,8 +22,9 @@ stay as DAL helpers -- they're pure lookups, no rules to add on top.
 from datetime import date
 
 from config import (
-    USERNAME_RE, EMAIL_RE, MOBILE_RE, USER_TYPES, DATE_RE,
+    USERNAME_RE, USER_TYPES, DATE_RE,
 )
+from bl.validators import is_valid_email, normalize_mobile
 from dal import users_dal, clients_dal
 
 
@@ -72,7 +73,7 @@ def validate_user_payload(data, partial=False):
             cleaned["email"] = ""
         else:
             e = str(raw).strip().lower()
-            if not EMAIL_RE.match(e) or len(e) > 254:
+            if not is_valid_email(e):
                 errors.append("email must be a valid email address")
             cleaned["email"] = e
     elif not partial:
@@ -83,8 +84,8 @@ def validate_user_payload(data, partial=False):
         if raw is None or str(raw).strip() == "":
             cleaned["mobile"] = ""
         else:
-            m = str(raw).strip().replace(" ", "").replace("-", "")
-            if not MOBILE_RE.match(m):
+            ok, m = normalize_mobile(raw)
+            if not ok:
                 errors.append("mobile must be 7-15 digits")
             cleaned["mobile"] = m
     elif not partial:

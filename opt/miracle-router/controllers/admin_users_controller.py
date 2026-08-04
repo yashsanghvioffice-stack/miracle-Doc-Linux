@@ -11,9 +11,11 @@ Admin endpoints for users:
 """
 
 import sqlite3
-from datetime import date
 
 from flask import Blueprint, jsonify, request
+from responses import error
+
+import config
 
 import messages as M
 from logger import log
@@ -38,22 +40,15 @@ def user_create():
     data = parse_body()
     errors, cleaned = validate_user_payload(data, partial=False)
     if errors:
-        return jsonify({"status": "error", "code": M.CODE_VALIDATION_FAILED,
-                        "message": M.MSG_VALIDATION_FAILED, "details": errors}), 400
+        return error(M.CODE_VALIDATION_FAILED, M.MSG_VALIDATION_FAILED, 400, details=errors)
 
     with db() as conn:
         if not servers_dal.server_id_exists(conn, cleaned["server_id"]):
-            return jsonify({"status": "error", "code": M.CODE_UNKNOWN_SERVER,
-                            "message": M.MSG_SERVER_ID_NOT_EXIST_TMPL.format(cleaned['server_id'])}), 400
+            return error(M.CODE_UNKNOWN_SERVER, M.MSG_SERVER_ID_NOT_EXIST_TMPL.format(cleaned['server_id']), 400)
 
         # client_name MUST exist in clients table (uKey precondition)
         if not clients_dal.client_name_exists(conn, cleaned["client_name"]):
-            return jsonify({
-                "status":  "error",
-                "code":    M.CODE_UNKNOWN_CLIENT,
-                "message": M.MSG_UNKNOWN_CLIENT,
-                "hint":    M.MSG_UNKNOWN_CLIENT_HINT_TMPL.format(cleaned["client_name"]),
-            }), 400
+            return error(M.CODE_UNKNOWN_CLIENT, M.MSG_UNKNOWN_CLIENT, 400, hint=M.MSG_UNKNOWN_CLIENT_HINT_TMPL.format(cleaned["client_name"]))
 
         try:
             row = users_dal.create_user(
@@ -67,11 +62,10 @@ def user_create():
                 cleaned.get("user_type", "new"),
                 # v4.1: per-user subscription start; default to today so
                 # every user of one Setup/Add-Users event shares a date.
-                cleaned.get("start_date") or date.today().isoformat(),
+                cleaned.get("start_date") or config.today_ist(),
             )
         except sqlite3.IntegrityError as e:
-            return jsonify({"status": "error", "code": M.CODE_USERNAME_EXISTS,
-                            "message": M.MSG_USERNAME_EXISTS, "detail": str(e)}), 409
+            return error(M.CODE_USERNAME_EXISTS, M.MSG_USERNAME_EXISTS, 409, detail=str(e))
 
     log.info("User created: id=%s username=%s", row["id"], cleaned['username'])
     return jsonify(dict(row)), 201
@@ -138,8 +132,7 @@ def user_get(user_id):
     with db() as conn:
         row = users_dal.get_user_by_id(conn, user_id)
     if not row:
-        return jsonify({"status": "error", "code": M.CODE_USER_NOT_FOUND,
-                        "message": M.MSG_USER_NOT_FOUND}), 404
+        return error(M.CODE_USER_NOT_FOUND, M.MSG_USER_NOT_FOUND, 404)
     return jsonify(dict(row))
 
 
@@ -152,36 +145,26 @@ def user_update(user_id):
     data = parse_body()
     errors, cleaned = validate_user_payload(data, partial=True)
     if errors:
-        return jsonify({"status": "error", "code": M.CODE_VALIDATION_FAILED,
-                        "message": M.MSG_VALIDATION_FAILED, "details": errors}), 400
+        return error(M.CODE_VALIDATION_FAILED, M.MSG_VALIDATION_FAILED, 400, details=errors)
     if not cleaned:
-        return jsonify({"status": "error", "code": M.CODE_NO_FIELDS_TO_UPDATE,
-                        "message": M.MSG_NO_FIELDS_TO_UPDATE}), 400
+        return error(M.CODE_NO_FIELDS_TO_UPDATE, M.MSG_NO_FIELDS_TO_UPDATE, 400)
 
     with db() as conn:
         if not users_dal.user_id_exists(conn, user_id):
-            return jsonify({"status": "error", "code": M.CODE_USER_NOT_FOUND,
-                        "message": M.MSG_USER_NOT_FOUND}), 404
+            return error(M.CODE_USER_NOT_FOUND, M.MSG_USER_NOT_FOUND, 404)
 
         if "server_id" in cleaned:
             if not servers_dal.server_id_exists(conn, cleaned["server_id"]):
-                return jsonify({"status": "error", "code": M.CODE_UNKNOWN_SERVER,
-                            "message": M.MSG_SERVER_ID_NOT_EXIST_TMPL.format(cleaned['server_id'])}), 400
+                return error(M.CODE_UNKNOWN_SERVER, M.MSG_SERVER_ID_NOT_EXIST_TMPL.format(cleaned['server_id']), 400)
 
         if "client_name" in cleaned:
             if not clients_dal.client_name_exists(conn, cleaned["client_name"]):
-                return jsonify({
-                    "status":  "error",
-                    "code":    M.CODE_UNKNOWN_CLIENT,
-                    "message": M.MSG_UNKNOWN_CLIENT,
-                    "hint":    M.MSG_UNKNOWN_CLIENT_HINT_TMPL.format(cleaned["client_name"]),
-                }), 400
+                return error(M.CODE_UNKNOWN_CLIENT, M.MSG_UNKNOWN_CLIENT, 400, hint=M.MSG_UNKNOWN_CLIENT_HINT_TMPL.format(cleaned["client_name"]))
 
         try:
             row = users_dal.update_user(conn, user_id, cleaned)
         except sqlite3.IntegrityError as e:
-            return jsonify({"status": "error", "code": M.CODE_CONFLICT,
-                            "message": M.MSG_CONFLICT, "detail": str(e)}), 409
+            return error(M.CODE_CONFLICT, M.MSG_CONFLICT, 409, detail=str(e))
 
     log.info("User updated: id=%s fields=%s", user_id, list(cleaned.keys()))
     return jsonify(dict(row))
@@ -195,8 +178,7 @@ def user_delete(user_id):
     with db() as conn:
         existing = users_dal.get_user_username(conn, user_id)
         if not existing:
-            return jsonify({"status": "error", "code": M.CODE_USER_NOT_FOUND,
-                        "message": M.MSG_USER_NOT_FOUND}), 404
+            return error(M.CODE_USER_NOT_FOUND, M.MSG_USER_NOT_FOUND, 404)
         users_dal.delete_user_by_id(conn, user_id)
 
     log.info("User deleted: id=%s username=%s", user_id, existing['username'])
@@ -209,8 +191,7 @@ def user_disable(user_id):
     """POST /admin/users/<id>/disable -- set is_active=0; returns the updated row."""
     with db() as conn:
         if not users_dal.user_id_exists(conn, user_id):
-            return jsonify({"status": "error", "code": M.CODE_USER_NOT_FOUND,
-                        "message": M.MSG_USER_NOT_FOUND}), 404
+            return error(M.CODE_USER_NOT_FOUND, M.MSG_USER_NOT_FOUND, 404)
         row = users_dal.set_user_active(conn, user_id, 0)
     log.info("User disabled: id=%s", user_id)
     return jsonify(dict(row))
@@ -222,8 +203,7 @@ def user_enable(user_id):
     """POST /admin/users/<id>/enable -- set is_active=1; returns the updated row."""
     with db() as conn:
         if not users_dal.user_id_exists(conn, user_id):
-            return jsonify({"status": "error", "code": M.CODE_USER_NOT_FOUND,
-                        "message": M.MSG_USER_NOT_FOUND}), 404
+            return error(M.CODE_USER_NOT_FOUND, M.MSG_USER_NOT_FOUND, 404)
         row = users_dal.set_user_active(conn, user_id, 1)
     log.info("User enabled: id=%s", user_id)
     return jsonify(dict(row))

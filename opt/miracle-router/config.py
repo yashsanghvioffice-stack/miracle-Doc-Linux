@@ -8,10 +8,35 @@ the DB, or any other gateway module -- safe to import from anywhere.
 
 import os
 import re
+from datetime import datetime, timedelta, timezone
 
 # ─── Environment ──────────────────────────────────────────────────
 DB_PATH = os.environ.get("MIRACLE_DB_PATH", "/etc/miracle-registry/miracle.db")
 API_KEY = os.environ.get("MIRACLE_API_KEY", "")
+
+# ─── Time zone (IST) ──────────────────────────────────────────────
+# Every timestamp/date the gateway stores or returns is IST (UTC+5:30; India
+# observes no DST). SQLite's CURRENT_TIMESTAMP / datetime('now') and Python's
+# naive now()/today() are UTC / host-dependent, so we apply a FIXED +5:30
+# offset everywhere -- values are correct regardless of the server's OS clock.
+IST_TZ        = timezone(timedelta(hours=5, minutes=30))
+# The one source of truth for the UTC->IST shift, as SQLite date-function
+# modifiers. Everything else composes from this (DRY) -- if the offset ever
+# changes, change it here only.
+SQL_IST_SHIFT = "'+5 hours', '+30 minutes'"
+# SQL fragments -- constants, safe to embed directly in query strings.
+SQL_NOW_IST   = "datetime('now', %s)" % SQL_IST_SHIFT   # 'YYYY-MM-DD HH:MM:SS'
+SQL_TODAY_IST = "date('now', %s)" % SQL_IST_SHIFT       # 'YYYY-MM-DD'
+
+
+def now_ist():
+    """Current IST timestamp as 'YYYY-MM-DD HH:MM:SS' (for Python-side writes)."""
+    return datetime.now(IST_TZ).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def today_ist():
+    """Today's date in IST as 'YYYY-MM-DD'."""
+    return datetime.now(IST_TZ).date().isoformat()
 
 # v4.1c: require partner_id on client create. Partner is mandatory per the
 # RA, so this defaults ON. During the EXE/PS Setup rollout window (before

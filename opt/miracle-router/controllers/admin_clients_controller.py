@@ -12,6 +12,7 @@ Admin endpoints for the clients (tenant/uKey) registry:
 import sqlite3
 
 from flask import Blueprint, jsonify
+from responses import error
 
 import config
 import messages as M
@@ -54,8 +55,7 @@ def client_create():
     data = parse_body()
     errors, cleaned = validate_client_create_payload(data)
     if errors:
-        return jsonify({"status": "error", "code": M.CODE_VALIDATION_FAILED,
-                        "message": errors[0]}), 400
+        return error(M.CODE_VALIDATION_FAILED, errors[0], 400)
     client_name  = cleaned["client_name"]
     ukey         = cleaned["ukey"]
     # Default the friendly label to the Customer ID when not provided.
@@ -69,15 +69,13 @@ def client_create():
     # MIRACLE_REQUIRE_PARTNER during the EXE/PS rollout window).
     partner_id = cleaned.get("partner_id")
     if partner_id is None and config.REQUIRE_PARTNER:
-        return jsonify({"status": "error", "code": M.CODE_VALIDATION_FAILED,
-                        "message": M.MSG_MISSING_PARTNER}), 400
+        return error(M.CODE_VALIDATION_FAILED, M.MSG_MISSING_PARTNER, 400)
 
     # A supplied partner_id must reference an existing partner.
     if partner_id is not None:
         with db() as conn:
             if not partners_dal.get_partner_by_id(conn, partner_id):
-                return jsonify({"status": "error", "code": M.CODE_UNKNOWN_PARTNER,
-                                "message": M.MSG_UNKNOWN_PARTNER_TMPL.format(partner_id)}), 400
+                return error(M.CODE_UNKNOWN_PARTNER, M.MSG_UNKNOWN_PARTNER_TMPL.format(partner_id), 400)
 
     try:
         with db() as conn:
@@ -96,25 +94,10 @@ def client_create():
             by_name = clients_dal.get_client_brief_by_name(conn, client_name)
             by_ukey = clients_dal.get_client_brief_by_ukey(conn, ukey)
         if by_name:
-            return jsonify({
-                "status":               "error",
-                "code":                 M.CODE_CLIENT_NAME_EXISTS,
-                "message":              M.MSG_CLIENT_NAME_EXISTS,
-                "existing_id":          by_name["id"],
-                "existing_client_name": by_name["client_name"],
-                "existing_ukey":        by_name["ukey"],
-            }), 409
+            return error(M.CODE_CLIENT_NAME_EXISTS, M.MSG_CLIENT_NAME_EXISTS, 409, existing_id=by_name["id"], existing_client_name=by_name["client_name"], existing_ukey=by_name["ukey"])
         if by_ukey:
-            return jsonify({
-                "status":               "error",
-                "code":                 M.CODE_UKEY_IN_USE,
-                "message":              M.MSG_UKEY_IN_USE,
-                "existing_id":          by_ukey["id"],
-                "existing_client_name": by_ukey["client_name"],
-                "existing_ukey":        by_ukey["ukey"],
-            }), 409
-        return jsonify({"status": "error", "code": M.CODE_CONFLICT,
-                        "message": M.MSG_CONFLICT, "detail": str(e)}), 409
+            return error(M.CODE_UKEY_IN_USE, M.MSG_UKEY_IN_USE, 409, existing_id=by_ukey["id"], existing_client_name=by_ukey["client_name"], existing_ukey=by_ukey["ukey"])
+        return error(M.CODE_CONFLICT, M.MSG_CONFLICT, 409, detail=str(e))
 
     log.info("Client created: id=%s name=%s display=%s ukey=%s",
              row["id"], client_name, display_name, ukey)
@@ -139,8 +122,7 @@ def client_get(client_id):
     with db() as conn:
         row = clients_dal.get_client_by_id(conn, client_id)
         if not row:
-            return jsonify({"status": "error", "code": M.CODE_CLIENT_NOT_FOUND,
-                            "message": M.MSG_CLIENT_NOT_FOUND}), 404
+            return error(M.CODE_CLIENT_NOT_FOUND, M.MSG_CLIENT_NOT_FOUND, 404)
         users = users_dal.list_users_for_client(conn, row["client_name"])
     out = _with_display_fallback(row)
     out["users"] = [dict(u) for u in users]
@@ -154,13 +136,11 @@ def client_by_name(client_name):
     """GET /admin/clients/by-name/<name> -- same shape as client_get, looked up
     by Customer ID (case-insensitive). 400 on a malformed name; 404 on miss."""
     if not CLIENT_NAME_RE.match(client_name or ""):
-        return jsonify({"status": "error", "code": M.CODE_INVALID_CLIENT_NAME,
-                        "message": M.MSG_INVALID_CLIENT_NAME_SHORT}), 400
+        return error(M.CODE_INVALID_CLIENT_NAME, M.MSG_INVALID_CLIENT_NAME_SHORT, 400)
     with db() as conn:
         row = clients_dal.get_client_by_name(conn, client_name)
         if not row:
-            return jsonify({"status": "error", "code": M.CODE_CLIENT_NOT_FOUND,
-                            "message": M.MSG_CLIENT_NOT_FOUND}), 404
+            return error(M.CODE_CLIENT_NOT_FOUND, M.MSG_CLIENT_NOT_FOUND, 404)
         users = users_dal.list_users_for_client(conn, row["client_name"])
     out = _with_display_fallback(row)
     out["users"] = [dict(u) for u in users]
@@ -174,9 +154,7 @@ def client_exists(client_name):
     """Duplicate-check endpoint. ALWAYS returns 200. Used by
     MiracleCloud-Setup.ps1 pre-flight."""
     if not CLIENT_NAME_RE.match(client_name or ""):
-        return jsonify({"exists": False, "status": "error",
-                        "code": M.CODE_INVALID_CLIENT_NAME,
-                        "message": M.MSG_INVALID_CLIENT_NAME_SHORT}), 200
+        return error(M.CODE_INVALID_CLIENT_NAME, M.MSG_INVALID_CLIENT_NAME_SHORT, 200, exists=False)
 
     with db() as conn:
         row = clients_dal.get_client_by_name(conn, client_name)
@@ -211,11 +189,9 @@ def client_update(client_id):
     data = parse_body()
     errors, cleaned = validate_client_update_payload(data)
     if errors:
-        return jsonify({"status": "error", "code": M.CODE_VALIDATION_FAILED,
-                        "message": errors[0]}), 400
+        return error(M.CODE_VALIDATION_FAILED, errors[0], 400)
     if not cleaned:
-        return jsonify({"status": "error", "code": M.CODE_NO_FIELDS_TO_UPDATE,
-                        "message": M.MSG_NO_FIELDS_TO_UPDATE}), 400
+        return error(M.CODE_NO_FIELDS_TO_UPDATE, M.MSG_NO_FIELDS_TO_UPDATE, 400)
 
     # Phase 2: auto-calc subscription_end only when a new start is sent
     # without an explicit end (store-as-sent otherwise).
@@ -224,14 +200,12 @@ def client_update(client_id):
     with db() as conn:
         existing = clients_dal.get_client_by_id(conn, client_id)
         if not existing:
-            return jsonify({"status": "error", "code": M.CODE_CLIENT_NOT_FOUND,
-                            "message": M.MSG_CLIENT_NOT_FOUND}), 404
+            return error(M.CODE_CLIENT_NOT_FOUND, M.MSG_CLIENT_NOT_FOUND, 404)
 
         # Phase 2: a supplied partner_id must reference an existing partner.
         if cleaned.get("partner_id") is not None:
             if not partners_dal.get_partner_by_id(conn, cleaned["partner_id"]):
-                return jsonify({"status": "error", "code": M.CODE_UNKNOWN_PARTNER,
-                                "message": M.MSG_UNKNOWN_PARTNER_TMPL.format(cleaned["partner_id"])}), 400
+                return error(M.CODE_UNKNOWN_PARTNER, M.MSG_UNKNOWN_PARTNER_TMPL.format(cleaned["partner_id"]), 400)
 
         try:
             # Cascade the new client_name into users (denormalized FK)
@@ -243,13 +217,10 @@ def client_update(client_id):
         except sqlite3.IntegrityError as e:
             msg = str(e).lower()
             if "client_name" in msg:
-                return jsonify({"status": "error", "code": M.CODE_CLIENT_NAME_EXISTS,
-                            "message": M.MSG_CLIENT_NAME_EXISTS}), 409
+                return error(M.CODE_CLIENT_NAME_EXISTS, M.MSG_CLIENT_NAME_EXISTS, 409)
             if "ukey" in msg:
-                return jsonify({"status": "error", "code": M.CODE_UKEY_IN_USE,
-                            "message": M.MSG_UKEY_IN_USE}), 409
-            return jsonify({"status": "error", "code": M.CODE_CONFLICT,
-                        "message": M.MSG_CONFLICT, "detail": str(e)}), 409
+                return error(M.CODE_UKEY_IN_USE, M.MSG_UKEY_IN_USE, 409)
+            return error(M.CODE_CONFLICT, M.MSG_CONFLICT, 409, detail=str(e))
 
     log.info("Client updated: id=%s fields=%s", client_id, list(cleaned.keys()))
     return jsonify(_with_display_fallback(row))
@@ -263,8 +234,7 @@ def client_delete(client_id):
     with db() as conn:
         row = clients_dal.get_client_by_id(conn, client_id)
         if not row:
-            return jsonify({"status": "error", "code": M.CODE_CLIENT_NOT_FOUND,
-                            "message": M.MSG_CLIENT_NOT_FOUND}), 404
+            return error(M.CODE_CLIENT_NOT_FOUND, M.MSG_CLIENT_NOT_FOUND, 404)
         clients_dal.delete_client_by_id(conn, client_id)
 
     log.info("Client deleted (row only): id=%s name=%s",

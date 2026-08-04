@@ -11,6 +11,8 @@ alongside the raw partner_id. LEFT JOIN keeps clients with no partner
 (partner_id NULL) and clients whose partner was soft-deleted visible.
 """
 
+from config import SQL_NOW_IST
+
 
 CLIENT_SELECT = """
     SELECT c.*,
@@ -144,9 +146,9 @@ def create_client(conn, client_name, ukey, display_name=None,
         INSERT INTO clients
             (client_name, display_name, ukey, partner_id,
              subscription_end, subscription_type, storage_gb,
-             contact_email, contact_mobile)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (client_name, display_name, ukey, partner_id,
+             contact_email, contact_mobile, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, {now})
+    """.format(now=SQL_NOW_IST), (client_name, display_name, ukey, partner_id,
           subscription_end, subscription_type, storage_gb,
           contact_email, contact_mobile))
     new_id = cur.lastrowid

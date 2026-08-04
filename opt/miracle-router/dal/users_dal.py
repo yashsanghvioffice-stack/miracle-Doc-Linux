@@ -6,6 +6,9 @@ LEFT JOIN). Every read endpoint returns rows in this shape so callers
 get a stable column set including ukey and server info.
 """
 
+from config import SQL_NOW_IST
+from dal.connection import apply_update
+
 
 # ─── The shared joined SELECT ─────────────────────────────────────
 # Used by every user-read endpoint. Includes:
@@ -231,10 +234,10 @@ def create_user(conn, username, client_name, email, mobile, server_id,
     cur = conn.execute("""
         INSERT INTO users
             (username, client_name, email, mobile, server_id, is_active,
-             user_type, start_date)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (username, client_name, email, mobile, server_id, is_active,
-          user_type, start_date))
+             user_type, start_date, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, {now})
+    """.format(now=SQL_NOW_IST), (username, client_name, email, mobile, server_id,
+          is_active, user_type, start_date))
     new_id = cur.lastrowid
     return conn.execute(USER_SELECT + " WHERE u.id = ?", (new_id,)).fetchone()
 
@@ -243,22 +246,14 @@ def update_user(conn, user_id, fields):
     """Update arbitrary subset of user columns. Bumps updated_at.
     Returns the post-update joined Row. Raises sqlite3.IntegrityError
     on conflicts (e.g. duplicate username)."""
-    sets   = ", ".join("{} = ?".format(k) for k in fields.keys())
-    params = list(fields.values()) + [user_id]
-    conn.execute(
-        "UPDATE users SET {}, updated_at = datetime('now') WHERE id = ?".format(sets),
-        params,
-    )
+    apply_update(conn, "users", fields, user_id)
     return conn.execute(USER_SELECT + " WHERE u.id = ?", (user_id,)).fetchone()
 
 
 def set_user_active(conn, user_id, is_active):
     """Flip the is_active flag (1 or 0). Bumps updated_at. Returns the
     post-update joined Row."""
-    conn.execute(
-        "UPDATE users SET is_active = ?, updated_at = datetime('now') WHERE id = ?",
-        (is_active, user_id),
-    )
+    apply_update(conn, "users", {"is_active": is_active}, user_id)
     return conn.execute(USER_SELECT + " WHERE u.id = ?", (user_id,)).fetchone()
 
 

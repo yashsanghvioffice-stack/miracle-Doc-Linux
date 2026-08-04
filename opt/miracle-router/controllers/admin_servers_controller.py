@@ -10,6 +10,7 @@ Admin endpoints for server_master (TSplus host registry):
 import sqlite3
 
 from flask import Blueprint, jsonify
+from responses import error
 
 import messages as M
 from logger import log
@@ -23,6 +24,17 @@ from bl.servers_bl import validate_server_payload
 bp = Blueprint("admin_servers", __name__, url_prefix="/admin/servers")
 
 
+def _unique_conflict(e):
+    """Map a server_master IntegrityError to the right 409 error response
+    (server_name vs server_ip). Shared by create + update."""
+    msg = str(e).lower()
+    if "server_name" in msg:
+        return error(M.CODE_SERVER_NAME_EXISTS, M.MSG_SERVER_NAME_EXISTS, 409)
+    if "server_ip" in msg:
+        return error(M.CODE_SERVER_IP_EXISTS, M.MSG_SERVER_IP_EXISTS, 409)
+    return error(M.CODE_CONFLICT, M.MSG_CONFLICT, 409, detail=str(e))
+
+
 @bp.route("", methods=["POST"])
 @require_api_key
 def server_create():
@@ -32,22 +44,13 @@ def server_create():
     data = parse_body()
     errors, cleaned = validate_server_payload(data, partial=False)
     if errors:
-        return jsonify({"status": "error", "code": M.CODE_VALIDATION_FAILED,
-                            "message": M.MSG_VALIDATION_FAILED, "details": errors}), 400
+        return error(M.CODE_VALIDATION_FAILED, M.MSG_VALIDATION_FAILED, 400, details=errors)
 
     try:
         with db() as conn:
             row = servers_dal.create_server(conn, cleaned["server_name"], cleaned["server_ip"])
     except sqlite3.IntegrityError as e:
-        msg = str(e).lower()
-        if "server_name" in msg:
-            return jsonify({"status": "error", "code": M.CODE_SERVER_NAME_EXISTS,
-                            "message": M.MSG_SERVER_NAME_EXISTS}), 409
-        if "server_ip" in msg:
-            return jsonify({"status": "error", "code": M.CODE_SERVER_IP_EXISTS,
-                            "message": M.MSG_SERVER_IP_EXISTS}), 409
-        return jsonify({"status": "error", "code": M.CODE_CONFLICT,
-                        "message": M.MSG_CONFLICT, "detail": str(e)}), 409
+        return _unique_conflict(e)
 
     log.info("Server created: id=%s name=%s ip=%s",
              row["id"], cleaned['server_name'], cleaned['server_ip'])
@@ -70,8 +73,7 @@ def server_get(server_id):
     with db() as conn:
         row = servers_dal.get_server_by_id(conn, server_id)
     if not row:
-        return jsonify({"status": "error", "code": M.CODE_SERVER_NOT_FOUND,
-                        "message": M.MSG_SERVER_NOT_FOUND}), 404
+        return error(M.CODE_SERVER_NOT_FOUND, M.MSG_SERVER_NOT_FOUND, 404)
     return jsonify(dict(row))
 
 
@@ -83,29 +85,18 @@ def server_update(server_id):
     data = parse_body()
     errors, cleaned = validate_server_payload(data, partial=True)
     if errors:
-        return jsonify({"status": "error", "code": M.CODE_VALIDATION_FAILED,
-                            "message": M.MSG_VALIDATION_FAILED, "details": errors}), 400
+        return error(M.CODE_VALIDATION_FAILED, M.MSG_VALIDATION_FAILED, 400, details=errors)
     if not cleaned:
-        return jsonify({"status": "error", "code": M.CODE_NO_FIELDS_TO_UPDATE,
-                        "message": M.MSG_NO_FIELDS_TO_UPDATE}), 400
+        return error(M.CODE_NO_FIELDS_TO_UPDATE, M.MSG_NO_FIELDS_TO_UPDATE, 400)
 
     with db() as conn:
         if not servers_dal.server_id_exists(conn, server_id):
-            return jsonify({"status": "error", "code": M.CODE_SERVER_NOT_FOUND,
-                        "message": M.MSG_SERVER_NOT_FOUND}), 404
+            return error(M.CODE_SERVER_NOT_FOUND, M.MSG_SERVER_NOT_FOUND, 404)
 
         try:
             row = servers_dal.update_server(conn, server_id, cleaned)
         except sqlite3.IntegrityError as e:
-            msg = str(e).lower()
-            if "server_name" in msg:
-                return jsonify({"status": "error", "code": M.CODE_SERVER_NAME_EXISTS,
-                            "message": M.MSG_SERVER_NAME_EXISTS}), 409
-            if "server_ip" in msg:
-                return jsonify({"status": "error", "code": M.CODE_SERVER_IP_EXISTS,
-                            "message": M.MSG_SERVER_IP_EXISTS}), 409
-            return jsonify({"status": "error", "code": M.CODE_CONFLICT,
-                        "message": M.MSG_CONFLICT, "detail": str(e)}), 409
+            return _unique_conflict(e)
 
     log.info("Server updated: id=%s fields=%s", server_id, list(cleaned.keys()))
     return jsonify(dict(row))
@@ -118,18 +109,11 @@ def server_delete(server_id):
     CANNOT_DELETE_SERVER_WITH_USERS (+ user_count) while any user references it."""
     with db() as conn:
         if not servers_dal.server_id_exists(conn, server_id):
-            return jsonify({"status": "error", "code": M.CODE_SERVER_NOT_FOUND,
-                        "message": M.MSG_SERVER_NOT_FOUND}), 404
+            return error(M.CODE_SERVER_NOT_FOUND, M.MSG_SERVER_NOT_FOUND, 404)
 
         user_count = users_dal.count_users_for_server(conn, server_id)
         if user_count > 0:
-            return jsonify({
-                "status":     "error",
-                "code":       M.CODE_CANNOT_DELETE_SERVER_WITH_USERS,
-                "message":    M.MSG_CANNOT_DELETE_SERVER_WITH_USERS,
-                "user_count": user_count,
-                "hint":       M.MSG_DELETE_USERS_HINT,
-            }), 409
+            return error(M.CODE_CANNOT_DELETE_SERVER_WITH_USERS, M.MSG_CANNOT_DELETE_SERVER_WITH_USERS, 409, user_count=user_count, hint=M.MSG_DELETE_USERS_HINT)
 
         servers_dal.delete_server_by_id(conn, server_id)
 

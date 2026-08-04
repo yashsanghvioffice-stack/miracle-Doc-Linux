@@ -12,7 +12,8 @@ response with code = CODE_VALIDATION_FAILED.
 """
 
 import messages as M
-from config import EMAIL_RE, PARTNER_NAME_RE, PHONE_RE
+from config import PARTNER_NAME_RE, PHONE_RE
+from bl.validators import parse_email_list
 
 
 # partners.email may hold several addresses (comma-separated), like
@@ -37,24 +38,14 @@ def _validate_email(raw):
     Each address is trimmed + lowercased + format-checked; empty segments (stray
     commas) dropped; duplicates de-duped preserving order; stored normalized as
     'a@x.com,b@y.com' (no spaces), capped at PARTNER_EMAIL_MAX_COUNT."""
-    v = str(raw or "").strip()
-    if not v:
-        return None, None
-    seen, emails = set(), []
-    for part in v.split(","):
-        e = part.strip().lower()
-        if not e:
-            continue                       # tolerate stray/trailing commas
-        if not EMAIL_RE.match(e) or len(e) > 254:
-            return M.MSG_INVALID_EMAIL, None
-        if e not in seen:
-            seen.add(e)
-            emails.append(e)
-    if not emails:
-        return M.MSG_INVALID_EMAIL, None
-    if len(emails) > PARTNER_EMAIL_MAX_COUNT:
+    status, value = parse_email_list(raw, PARTNER_EMAIL_MAX_COUNT)
+    if status == "empty":
+        return None, None                  # blank -> 'clear this field'
+    if status == "too_many":
         return M.MSG_TOO_MANY_PARTNER_EMAILS, None
-    return None, ",".join(emails)
+    if status == "invalid":
+        return M.MSG_INVALID_EMAIL, None
+    return None, value
 
 
 def _validate_phone(raw):

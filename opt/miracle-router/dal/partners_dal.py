@@ -16,6 +16,9 @@ Deletion policy is enforced by the controller, not here:
     * unreferenced                      -> hard delete
 """
 
+from config import SQL_NOW_IST
+from dal.connection import apply_update
+
 
 def list_partners(conn, active_only=False):
     """List partners, ordered by name. When active_only is truthy, filters
@@ -58,7 +61,8 @@ def create_partner(conn, name, email=None, phone=None):
     """Insert and return the new row. Raises sqlite3.IntegrityError on
     duplicate name (unique constraint on partners.name)."""
     cur = conn.execute(
-        "INSERT INTO partners (name, email, phone) VALUES (?, ?, ?)",
+        "INSERT INTO partners (name, email, phone, created_at) "
+        "VALUES (?, ?, ?, " + SQL_NOW_IST + ")",
         (name, email, phone),
     )
     new_id = cur.lastrowid
@@ -71,12 +75,7 @@ def update_partner(conn, partner_id, fields):
     """Update arbitrary subset of (name, email, phone, is_active). Also
     bumps updated_at. Returns the post-update row. Raises
     sqlite3.IntegrityError on name conflict."""
-    sets   = ", ".join("{} = ?".format(k) for k in fields.keys())
-    params = list(fields.values()) + [partner_id]
-    conn.execute(
-        "UPDATE partners SET {}, updated_at = datetime('now') WHERE id = ?".format(sets),
-        params,
-    )
+    apply_update(conn, "partners", fields, partner_id)
     return conn.execute(
         "SELECT * FROM partners WHERE id = ?", (partner_id,)
     ).fetchone()
@@ -85,10 +84,7 @@ def update_partner(conn, partner_id, fields):
 def soft_delete_partner(conn, partner_id):
     """Set is_active=0 without removing the row. Historical client
     references keep working (name/email still readable via JOIN)."""
-    conn.execute(
-        "UPDATE partners SET is_active = 0, updated_at = datetime('now') WHERE id = ?",
-        (partner_id,),
-    )
+    apply_update(conn, "partners", {"is_active": 0}, partner_id)
 
 
 def delete_partner_by_id(conn, partner_id):
