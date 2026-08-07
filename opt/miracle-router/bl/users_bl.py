@@ -21,10 +21,10 @@ stay as DAL helpers -- they're pure lookups, no rules to add on top.
 
 from datetime import date
 
+import messages as M
 from config import (
     USERNAME_RE, USER_TYPES, DATE_RE,
 )
-from bl.validators import is_valid_email, normalize_mobile
 from dal import users_dal, clients_dal
 
 
@@ -61,35 +61,21 @@ def validate_user_payload(data, partial=False):
             errors.append("client_name must be 1-128 chars")
         cleaned["client_name"] = c
 
-    # email / mobile -- OPTIONAL (v4.2), and independent of each other:
-    #   * key omitted : CREATE stores '' (reads back as null); UPDATE unchanged
-    #   * null or ""  : clear -> '' (reads back as null) on both create + update
-    #   * non-empty   : validate + normalize (email lowercased, mobile stripped)
-    # A stored '' is surfaced as JSON null by USER_SELECT's NULLIF(). Format is
-    # only checked when a non-empty value is supplied.
-    if "email" in data:
-        raw = data["email"]
-        if raw is None or str(raw).strip() == "":
-            cleaned["email"] = ""
-        else:
-            e = str(raw).strip().lower()
-            if not is_valid_email(e):
-                errors.append("email must be a valid email address")
-            cleaned["email"] = e
-    elif not partial:
-        cleaned["email"] = ""
-
-    if "mobile" in data:
-        raw = data["mobile"]
-        if raw is None or str(raw).strip() == "":
-            cleaned["mobile"] = ""
-        else:
-            ok, m = normalize_mobile(raw)
-            if not ok:
-                errors.append("mobile must be 7-15 digits")
-            cleaned["mobile"] = m
-    elif not partial:
-        cleaned["mobile"] = ""
+    # email / mobile -- REMOVED from the user API in v4.3. Contact details are
+    # ACCOUNT-level only: clients.contact_email / clients.contact_mobile, both
+    # of which accept several comma-separated values. Having the same concept
+    # on two levels was a standing source of confusion and mis-set data.
+    #
+    # The physical users.email / users.mobile columns still exist (NOT NULL
+    # DEFAULT ''), holding the pre-migration values, so the consolidation done
+    # by migrations/v4_8_consolidate_contacts.py stays reversible. The DAL
+    # writes '' on create; nothing reads them. They are NOT dropped.
+    #
+    # Silently ignoring a sent key would let an old EXE think it stored a
+    # contact that went nowhere, so both are rejected outright.
+    for gone in ("email", "mobile"):
+        if gone in data:
+            errors.append(M.MSG_USER_CONTACT_REMOVED_TMPL.format(gone))
 
     if "server_id" in cleaned:
         try:
@@ -106,21 +92,31 @@ def validate_user_payload(data, partial=False):
         else:
             errors.append("is_active must be 0 or 1")
 
-    # user_type (Phase 2). Optional; defaults to 'new' at the DB layer
-    # when omitted. Set by the desktop flow, not inferred from username.
+    # user_type (Phase 2; 'migrated' added v4.3). Optional; defaults to 'new'
+    # at the DB layer when omitted. Set by the desktop flow, not inferred from
+    # the username. Accepted case-insensitively, stored lower-case.
+    # The valid set is config.USER_TYPES -- the message is the single constant
+    # in messages.py so the wire contract can't drift from the enum again.
     if "user_type" in data and data["user_type"] is not None \
             and str(data["user_type"]).strip() != "":
         t = str(data["user_type"]).strip().lower()
         if t not in USER_TYPES:
-            errors.append("user_type must be 'new' or 'additional'")
+            errors.append(M.MSG_INVALID_USER_TYPE)
         else:
             cleaned["user_type"] = t
 
-    # start_date (v4.1). Optional; per-user subscription/purchase start.
-    # Controller defaults it to today when omitted.
-    if "start_date" in data and data["start_date"] is not None \
-            and str(data["start_date"]).strip() != "":
-        sd = str(data["start_date"]).strip()
+    # subscription_start (v4.1 as `start_date`, renamed v4.3). Optional;
+    # per-user subscription/purchase start. Controller defaults it to today
+    # when omitted, but a supplied value ALWAYS wins -- that is what lets a
+    # migrated user keep its real back-dated start.
+    #
+    # WIRE NAME: `subscription_start` only. The pre-v4.3 `start_date` key is
+    # NOT accepted -- a caller still sending it gets today's date by default,
+    # so the desktop tool must be updated in lockstep with this deploy.
+    # See docs/CHANGES_IN_EXE.md.
+    if "subscription_start" in data and data["subscription_start"] is not None \
+            and str(data["subscription_start"]).strip() != "":
+        sd = str(data["subscription_start"]).strip()
         valid = bool(DATE_RE.match(sd))
         if valid:
             try:
@@ -129,9 +125,9 @@ def validate_user_payload(data, partial=False):
             except ValueError:
                 valid = False
         if not valid:
-            errors.append("start_date must be a valid date in YYYY-MM-DD format")
+            errors.append("subscription_start must be a valid date in YYYY-MM-DD format")
         else:
-            cleaned["start_date"] = sd
+            cleaned["subscription_start"] = sd
 
     return errors, cleaned
 

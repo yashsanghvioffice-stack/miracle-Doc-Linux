@@ -13,7 +13,8 @@ Columns shifted (only where the table+column exist and the value is non-NULL):
     clients              : created_at
     rdp_download_tokens  : created_at, used_at
     request_log          : ts
-NOT shifted: users.start_date, clients.subscription_start / subscription_end
+NOT shifted: users.subscription_start (was users.start_date pre-v4.3),
+clients.subscription_start / subscription_end
 (business DATES -- already IST, set from the desktop file / API, never UTC).
 
 ONE-SHOT GUARD (PRAGMA user_version):

@@ -21,12 +21,17 @@ from dal.connection import apply_update
 #     the user's client + that client's partner: partner_id, partner_name,
 #     subscription_start, subscription_end. This is THE single query that
 #     drives the report -- no per-row round trips.
+#   - legacy provenance (v4.3): legacy_server_name / legacy_server_ip, where
+#     a migrated customer came FROM. NULL for normal signups. Distinct from
+#     s.server_name / s.server_ip above, which are the CURRENT routing target.
 #
 USER_SELECT = """
     SELECT u.id, u.username, u.client_name,
-           NULLIF(u.email, '')  AS email,
-           NULLIF(u.mobile, '') AS mobile,
-           u.server_id, u.is_active, u.user_type, u.start_date,
+           -- v4.3: u.email / u.mobile are NOT projected. Contacts are
+           -- account-level (c.contact_email / c.contact_mobile below); the
+           -- per-user columns survive only as dead pre-migration data.
+           u.server_id, u.is_active, u.user_type,
+           u.subscription_start,
            u.created_at, u.updated_at,
            s.server_name, s.server_ip,
            c.id AS client_id,
@@ -36,7 +41,18 @@ USER_SELECT = """
            p.name AS partner_name,
            c.subscription_type,
            c.storage_gb,
-           c.subscription_end
+           -- subscription_end stays CLIENT-level: one shared expiry per
+           -- customer, all batches renew together (unchanged in v4.3).
+           -- c.subscription_start is deliberately NOT selected: the start is
+           -- per-user (u.subscription_start above). Selecting both would put
+           -- two columns named subscription_start in one row, and dict(row)
+           -- silently keeps only one of them.
+           c.subscription_end,
+           -- Account-level contact (v4.3): the ONE place contacts now live.
+           c.contact_email,
+           c.contact_mobile,
+           c.legacy_server_name,
+           c.legacy_server_ip
     FROM   users u
     JOIN   server_master s ON s.id = u.server_id
     LEFT JOIN clients c ON c.client_name = u.client_name COLLATE NOCASE
@@ -128,7 +144,7 @@ GROUPED_SELECT = """
            c.storage_gb,
            c.subscription_end,
            u.user_type,
-           u.start_date,
+           u.subscription_start,
            COUNT(*)                                        AS no_of_users,
            SUM(CASE WHEN u.is_active = 1 THEN 1 ELSE 0 END) AS active_users,
            SUM(CASE WHEN u.is_active = 0 THEN 1 ELSE 0 END) AS inactive_users,
@@ -144,7 +160,7 @@ def list_users_grouped(conn, **filters):
     """Grouped report rows. Same filters as list_users."""
     clause, params = _user_filter(**filters)
     query = (GROUPED_SELECT + clause +
-             " GROUP BY u.client_name COLLATE NOCASE, u.user_type, u.start_date"
+             " GROUP BY u.client_name COLLATE NOCASE, u.user_type, u.subscription_start"
              # Newly-created batch on top: order groups by their most-recent
              # user created_at; MAX(u.id) breaks ties (same-second creates)
              # so the order is always deterministic.
@@ -217,15 +233,17 @@ def count_users_for_server(conn, server_id):
 # =================================================================
 
 def create_user(conn, username, client_name, email, mobile, server_id,
-                is_active=1, user_type="new", start_date=None):
+                is_active=1, user_type="new", subscription_start=None):
     """Insert a user. Returns the new joined Row (via USER_SELECT).
     Raises sqlite3.IntegrityError on duplicate username.
 
     `user_type` (Phase 2) is 'new' or 'additional' -- the desktop app
     sends the right value based on the flow; the DAL just stores it.
 
-    `start_date` (v4.1) is this user's subscription/purchase start date
-    (ISO YYYY-MM-DD). The controller defaults it to today when omitted.
+    `subscription_start` (v4.1 as `start_date`, renamed v4.3) is this user's
+    subscription/purchase start date (ISO YYYY-MM-DD). The controller defaults
+    it to today when omitted; a supplied value always wins, so a migrated
+    user's back-dated start survives.
 
     `email`/`mobile` (v4.2) are OPTIONAL: None is coerced to '' so the
     NOT NULL columns are satisfied; USER_SELECT surfaces '' back as null."""
@@ -234,10 +252,10 @@ def create_user(conn, username, client_name, email, mobile, server_id,
     cur = conn.execute("""
         INSERT INTO users
             (username, client_name, email, mobile, server_id, is_active,
-             user_type, start_date, created_at)
+             user_type, subscription_start, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, {now})
     """.format(now=SQL_NOW_IST), (username, client_name, email, mobile, server_id,
-          is_active, user_type, start_date))
+          is_active, user_type, subscription_start))
     new_id = cur.lastrowid
     return conn.execute(USER_SELECT + " WHERE u.id = ?", (new_id,)).fetchone()
 

@@ -86,8 +86,8 @@ SCHEMA = [
                 mobile       TEXT    NOT NULL,
                 server_id    INTEGER NOT NULL,
                 is_active    INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0,1)),
-                user_type    TEXT    NOT NULL DEFAULT 'new' CHECK(user_type IN ('new','additional')),
-                start_date   DATE,
+                user_type    TEXT    NOT NULL DEFAULT 'new' CHECK(user_type IN ('new','additional','migrated')),
+                subscription_start DATE,
                 created_at   TIMESTAMP __TS_DEFAULT__,
                 updated_at   TIMESTAMP,
                 FOREIGN KEY (server_id) REFERENCES server_master(id)
@@ -103,12 +103,29 @@ SCHEMA = [
             # (event-based). CHECK is
             # omitted here (ADD COLUMN keeps it simple; the enum is
             # enforced at the BL layer). Fresh DBs get the CHECK via CREATE.
+            #
+            # v4.3 widened the enum to include 'migrated'. SQLite cannot ALTER
+            # a CHECK, so a DB whose `users` table was CREATEd before v4.3
+            # still carries the 2-value CHECK and will reject 'migrated' with
+            # an IntegrityError. Confirm before relying on it:
+            #   sqlite3 <db> "SELECT sql FROM sqlite_master WHERE name='users'"
+            # If the 2-value CHECK is present, the column must be rebuilt
+            # (12-step table rebuild) -- DBs that got user_type via the ALTER
+            # below have NO CHECK and need nothing.
             "user_type":  "TEXT NOT NULL DEFAULT 'new'",
-            # start_date (v4.1a) = per-user subscription/purchase start.
+            # subscription_start (v4.1a as `start_date`, RENAMED in v4.3) =
+            # per-user subscription/purchase start -- the authoritative grain.
             # Nullable; existing rows backfilled by the v4_5 seed migration
             # (event-based: client start date for 'new', own created_at for
             # 'additional').
-            "start_date": "DATE",
+            #
+            # The rename from `start_date` is done by
+            # migrations/v4_7_rename_start_date.py, which MUST run before this
+            # script on an un-migrated DB -- otherwise the ALTER below would
+            # add an EMPTY subscription_start next to the populated
+            # start_date and every start date would read back NULL. The
+            # pre-flight guard in main() refuses to run in that situation.
+            "subscription_start": "DATE",
             "updated_at": "TIMESTAMP",
         },
         "indexes": [
@@ -174,7 +191,10 @@ SCHEMA = [
                 subscription_end   DATE,
                 contact_email      TEXT,
                 contact_mobile     TEXT,
+                legacy_server_name TEXT,
+                legacy_server_ip   TEXT,
                 created_at         TIMESTAMP __TS_DEFAULT__,
+                updated_at         TIMESTAMP,
                 CHECK(length(ukey) = 8)
             )
         """,
@@ -192,9 +212,12 @@ SCHEMA = [
             # backfill -- existing clients edited later via PUT.
             "subscription_type":  "TEXT",
             "storage_gb":         "INTEGER",
-            # subscription_start is DEPRECATED in v4.1 (start moved to
-            # users.start_date). Column kept for compatibility; no longer
-            # read or written. subscription_end (expiry) stays authoritative.
+            # subscription_start: deprecated in v4.1 (start moved to
+            # users.start_date), UN-deprecated in v4.3. A migrated tenant has
+            # ONE original start date on the old server -- a property of the
+            # tenant, not of its individual users -- so the account-level
+            # column is authoritative again. WRITE-ONCE: set on POST only,
+            # never written by PUT. subscription_end (expiry) unchanged.
             "subscription_start": "DATE",
             "subscription_end":   "DATE",
             # Account-level customer contact (v4.1 migration). Nullable;
@@ -202,6 +225,18 @@ SCHEMA = [
             # admin user by migrations/v4_5_seed_partners_contacts.py.
             "contact_email":      "TEXT",
             "contact_mobile":     "TEXT",
+            # Legacy provenance (v4.3) -- where a migrated customer came FROM
+            # (e.g. 'moc1' / '10.0.0.14'). Nullable; NULL for every normal
+            # signup. These are HISTORY, not routing: the CURRENT target stays
+            # users.server_id -> server_master. WRITE-ONCE at creation; the
+            # desktop tool never updates them, and PUT cannot set them. They
+            # live on `clients` because a customer migrates as a whole tenant.
+            "legacy_server_name": "TEXT",
+            "legacy_server_ip":   "TEXT",
+            # updated_at (v4.3) -- `clients` was the only table tracking
+            # created_at without it. NULL until the row is first updated;
+            # bumped by dal.connection.apply_update, same as every other table.
+            "updated_at":         "TIMESTAMP",
         },
         "indexes": [
             "CREATE INDEX IF NOT EXISTS idx_clients_ukey       ON clients(ukey COLLATE NOCASE)",
@@ -345,6 +380,31 @@ def main():
 
         existing_tables  = list_tables(conn)
         existing_indexes = list_indexes(conn)
+
+        # ── Pre-flight: the v4.3 start_date -> subscription_start rename ──
+        # If `users` still carries the OLD column and not the new one, the
+        # add_columns pass below would ADD an empty `subscription_start`
+        # beside the populated `start_date` -- silently NULLing every start
+        # date in the reports. SQLite cannot rename via ADD COLUMN, so this
+        # must be done by the migration first. Refuse rather than corrupt.
+        if "users" in existing_tables:
+            ucols = list_columns(conn, "users")
+            if "start_date" in ucols and "subscription_start" not in ucols:
+                sys.stderr.write(
+                    "\nFATAL: users.start_date has not been renamed to "
+                    "users.subscription_start.\n"
+                    "       Running this script now would ADD an EMPTY "
+                    "subscription_start column\n"
+                    "       next to your populated start_date -- every start "
+                    "date would read NULL.\n\n"
+                    "       Back up, then run the rename migration FIRST:\n"
+                    "         sudo cp %s /root/miracle.db.pre-v4_7\n"
+                    "         sudo python3 /opt/miracle-router/migrations/"
+                    "v4_7_rename_start_date.py --dry-run\n"
+                    "         sudo python3 /opt/miracle-router/migrations/"
+                    "v4_7_rename_start_date.py\n\n"
+                    "       Then re-run this script.\n" % DB_PATH)
+                sys.exit(3)
 
         for entry in SCHEMA:
             table  = entry["table"]

@@ -88,10 +88,15 @@ PHONE_RE       = re.compile(r"^[0-9 +\-()]{7,20}$")
 # 2026-13-40) is done by constructing a datetime.date in the BL layer.
 DATE_RE        = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
-# user_type enum (Phase 2). 'new' = created in a Create-a-Customer batch,
-# 'additional' = added to an existing account later. Set by the flow, not
-# inferred from the username.
-USER_TYPES     = ("new", "additional")
+# user_type enum (Phase 2, extended v4.3). Set by the desktop flow, never
+# inferred from the username:
+#   'new'        = first users of a customer that signed up with us
+#   'additional' = extra seats bought later by an existing customer
+#   'migrated'   = initial users of a customer moved off a legacy third-party
+#                  server (moc1..moc4). NOT new business -- counted separately.
+# A migrated customer that later buys seats gets 'additional' for that second
+# batch, exactly like anyone else. Only the FIRST batch is 'migrated'.
+USER_TYPES     = ("new", "additional", "migrated")
 
 # subscription_type enum (v4.1). 'single' vs 'multi' user subscription,
 # chosen once at Setup and stored on the client.

@@ -87,6 +87,10 @@ def client_create():
                 storage_gb=cleaned.get("storage_gb"),
                 contact_email=cleaned.get("contact_email"),
                 contact_mobile=cleaned.get("contact_mobile"),
+                # v4.3 write-once provenance. Absent -> None -> NULL, so a
+                # caller sending the pre-v4.3 body shape is unaffected.
+                legacy_server_name=cleaned.get("legacy_server_name"),
+                legacy_server_ip=cleaned.get("legacy_server_ip"),
             )
     except sqlite3.IntegrityError as e:
         # Surface which field clashed
@@ -172,6 +176,17 @@ def client_exists(client_name):
         "display_name": display_name,
         "ukey":         row["ukey"],
         "user_count":   user_count,
+        # v4.3: this dict is hand-built (it is NOT a SELECT * passthrough), so
+        # every new column must be added here explicitly. When display_name
+        # was added in v3.6 it went into the schema but not into the
+        # projections, and the desktop tool had to work around the gap.
+        # No subscription_start here -- the start is per-user; this is a
+        # client row. subscription_end is the shared expiry.
+        "subscription_end":   row["subscription_end"],
+        "legacy_server_name": row["legacy_server_name"],
+        "legacy_server_ip":   row["legacy_server_ip"],
+        "created_at":         row["created_at"],
+        "updated_at":         row["updated_at"],
     }
     if srv:
         out["server_ip"]   = srv["server_ip"]

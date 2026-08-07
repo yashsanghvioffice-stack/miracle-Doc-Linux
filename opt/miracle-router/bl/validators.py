@@ -58,3 +58,40 @@ def parse_email_list(raw, max_count):
     if len(emails) > max_count:
         return "too_many", None
     return "ok", ",".join(emails)
+
+
+def parse_mobile_list(raw, max_count):
+    """Parse a comma-separated mobile list (one or more numbers).
+
+    The mobile twin of parse_email_list, added in v4.3 when per-user contacts
+    were consolidated onto the client: a client with three users can end up
+    holding three numbers, and a single-value column could not represent that
+    without discarding data. Same contract, same statuses.
+
+    Each number is trimmed of spaces/dashes and checked against the 7-15 digit
+    rule; empty segments are dropped; duplicates removed preserving order.
+
+        ("ok", "+911111111111,+912222222222")
+        ("empty", None) / ("invalid", None) / ("too_many", None)
+
+    A single number still round-trips unchanged, so every pre-v4.3 caller is
+    unaffected -- this only widens what is accepted.
+    """
+    v = str(raw or "").strip()
+    if not v:
+        return "empty", None
+    seen, mobiles = set(), []
+    for part in v.split(","):
+        if not part.strip():
+            continue                       # tolerate stray/trailing commas
+        ok, m = normalize_mobile(part)
+        if not ok:
+            return "invalid", None
+        if m not in seen:
+            seen.add(m)
+            mobiles.append(m)
+    if not mobiles:
+        return "invalid", None
+    if len(mobiles) > max_count:
+        return "too_many", None
+    return "ok", ",".join(mobiles)

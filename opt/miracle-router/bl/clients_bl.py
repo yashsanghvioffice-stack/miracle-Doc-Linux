@@ -13,9 +13,9 @@ from datetime import date, timedelta
 import messages as M
 from config import (
     CLIENT_NAME_RE, UKEY_RE, DATE_RE, SUBSCRIPTION_TYPES,
-    today_ist,
+    SERVER_NAME_RE, IPV4_RE, today_ist,
 )
-from bl.validators import parse_email_list, normalize_mobile
+from bl.validators import parse_email_list, parse_mobile_list
 
 
 DISPLAY_NAME_MAX = 128
@@ -23,6 +23,8 @@ DISPLAY_NAME_MAX = 128
 # contact_email may hold several addresses (comma-separated). Cap the count
 # so a runaway paste can't bloat the row; each address is length/format checked.
 CONTACT_EMAIL_MAX_COUNT = 20
+# contact_mobile is multi-value too since v4.3 (per-user contacts merged up).
+CONTACT_MOBILE_MAX_COUNT = 20
 
 
 def _validate_display_name(raw):
@@ -132,12 +134,55 @@ def _apply_optional_client_fields(data, cleaned):
             return M.MSG_INVALID_CONTACT_EMAIL
         cleaned["contact_email"] = value
 
+    # contact_mobile accepts ONE OR MORE numbers, comma-separated (v4.3) --
+    # same handling as contact_email. Widened when per-user contacts were
+    # consolidated onto the client: a client with three users can legitimately
+    # hold three numbers, and a single-value column would have forced the
+    # migration to discard two of them.
     if "contact_mobile" in data and data["contact_mobile"] is not None \
             and str(data["contact_mobile"]).strip() != "":
-        ok, m = normalize_mobile(data["contact_mobile"])
-        if not ok:
+        status, value = parse_mobile_list(data["contact_mobile"], CONTACT_MOBILE_MAX_COUNT)
+        if status == "too_many":
+            return M.MSG_TOO_MANY_CONTACT_MOBILES
+        if status == "invalid":
             return M.MSG_INVALID_CONTACT_MOBILE
-        cleaned["contact_mobile"] = m
+        cleaned["contact_mobile"] = value
+
+    return None
+
+
+def _validate_legacy_server_fields(data, cleaned):
+    """Validate the v4.3 legacy-provenance fields (legacy_server_name,
+    legacy_server_ip) and fold them into `cleaned`. Returns an error message
+    on the first bad value, else None.
+
+    CREATE-ONLY by design -- deliberately NOT called from the update
+    validator, which is what makes these columns write-once. They record
+    where a migrated customer came FROM; if a customer is ever moved again
+    that is a separate decision, not a silent overwrite.
+
+    Absent / null / blank -> field simply omitted from `cleaned` -> NULL.
+    Validation mirrors servers_bl.validate_server_payload exactly, so a
+    legacy server is held to the same standard as a real one.
+    """
+    if "legacy_server_name" in data and data["legacy_server_name"] is not None \
+            and str(data["legacy_server_name"]).strip() != "":
+        n = str(data["legacy_server_name"]).strip()
+        if not SERVER_NAME_RE.match(n):
+            return M.MSG_INVALID_LEGACY_SERVER_NAME
+        cleaned["legacy_server_name"] = n
+
+    if "legacy_server_ip" in data and data["legacy_server_ip"] is not None \
+            and str(data["legacy_server_ip"]).strip() != "":
+        ip = str(data["legacy_server_ip"]).strip()
+        if not IPV4_RE.match(ip):
+            return M.MSG_INVALID_LEGACY_SERVER_IP
+        try:
+            if any(not 0 <= int(p) <= 255 for p in ip.split(".")):
+                return M.MSG_INVALID_LEGACY_SERVER_IP_OCTET
+        except ValueError:
+            return M.MSG_INVALID_LEGACY_SERVER_IP_OCTET
+        cleaned["legacy_server_ip"] = ip
 
     return None
 
@@ -146,13 +191,17 @@ def apply_subscription_rules(cleaned, is_create):
     """Inject the client EXPIRY (subscription_end) default/auto-calc after
     validation.
 
-    v4.1: subscription_start is NOT persisted on the client (per-user start
-    lives on users.start_date). A caller may still pass subscription_start
-    as the *basis* for the expiry auto-calc, but it is dropped before the
-    client is written.
+    subscription_start is NOT persisted on the client -- the start date is
+    per-user and lives on users.subscription_start (renamed from start_date
+    in v4.3). A caller may still pass subscription_start as the *basis* for
+    the expiry auto-calc, but it is dropped before the client is written.
+
+    subscription_end stays CLIENT-level and unchanged: one shared expiry per
+    customer, all of that customer's batches renewing together.
 
     * create: if subscription_end absent, calc = (provided start or today)
-      + 1yr − 1day.
+      + 1yr − 1day. For a migrated customer that means passing the real
+      back-dated start yields the correct remaining term.
     * update: only auto-calc subscription_end when a new start was sent
       without an end (store-as-sent otherwise).
     """
@@ -165,7 +214,7 @@ def apply_subscription_rules(cleaned, is_create):
             cleaned["subscription_end"] = add_one_year_minus_one_day(
                 cleaned["subscription_start"])
 
-    # subscription_start is never written on the client (deprecated column).
+    # subscription_start is never written on the client (per-user column).
     cleaned.pop("subscription_start", None)
 
 
@@ -203,6 +252,12 @@ def validate_client_create_payload(data):
     # Optional Phase-2 fields (partner_id, subscription dates). The
     # controller applies defaults/auto-calc + partner existence after this.
     err = _apply_optional_client_fields(data, cleaned)
+    if err:
+        return [err], {}
+
+    # Optional v4.3 legacy-provenance fields. Create-only -- see the
+    # docstring on _validate_legacy_server_fields for the write-once rule.
+    err = _validate_legacy_server_fields(data, cleaned)
     if err:
         return [err], {}
 

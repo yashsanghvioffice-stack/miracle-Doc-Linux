@@ -198,8 +198,6 @@ body = check("POST /admin/users create",
                  json={
                      "username": "acme_user1",
                      "client_name": "Acme",
-                     "email": "u1@acme.example",
-                     "mobile": "+15551234567",
                      "server_id": server_id,
                      "password": "ignored-by-gateway",
                  }),
@@ -212,8 +210,6 @@ check("POST /admin/users duplicate username",
           json={
               "username": "acme_user1",
               "client_name": "Acme",
-              "email": "u1b@acme.example",
-              "mobile": "+15559999999",
               "server_id": server_id,
           }),
       409, "USERNAME_EXISTS")
@@ -224,8 +220,6 @@ check("POST /admin/users unknown client",
           json={
               "username": "ghost_user",
               "client_name": "NoSuchClient",
-              "email": "g@x.com",
-              "mobile": "+15550000000",
               "server_id": server_id,
           }),
       400, "UNKNOWN_CLIENT")
@@ -236,21 +230,18 @@ check("POST /admin/users unknown server",
           json={
               "username": "ghost_user2",
               "client_name": "Acme",
-              "email": "g@x.com",
-              "mobile": "+15550000000",
               "server_id": 99999,
           }),
       400, "UNKNOWN_SERVER")
 
-check("POST /admin/users validation: bad email",
+check("POST /admin/users rejects email (account-level now)",
       hit("POST", "/admin/users",
           headers=H,
           json={
               "username": "badmail",
               "client_name": "Acme",
-              "email": "not-an-email",
-              "mobile": "+15550000000",
               "server_id": server_id,
+              "email": "not-an-email",
           }),
       400, "VALIDATION_FAILED")
 
@@ -333,7 +324,6 @@ else:
 # Verify display_name appears on the user record via JOIN (USER_SELECT)
 hit("POST", "/admin/users", headers=H,
     json={"username": "rkit_u1", "client_name": "1056",
-          "email": "u1@rkit.example", "mobile": "+15550000001",
           "server_id": server_id})
 body = check("GET /admin/users?expand=true carries display_name via JOIN",
              hit("GET", "/admin/users?expand=true", headers=H),
@@ -745,7 +735,6 @@ else:
 body = check("POST /admin/users (user_type omitted -> new)",
              hit("POST", "/admin/users", headers=H,
                  json={"username": "acct_admin1", "client_name": "AcctFull",
-                       "email": "a1@acct.example", "mobile": "+15551230001",
                        "server_id": p2_server}),
              201)
 if body.get("user_type") == "new":
@@ -759,7 +748,6 @@ else:
 body = check("POST /admin/users (user_type=additional)",
              hit("POST", "/admin/users", headers=H,
                  json={"username": "acct_extra1", "client_name": "AcctFull",
-                       "email": "e1@acct.example", "mobile": "+15551230002",
                        "server_id": p2_server, "user_type": "additional"}),
              201)
 if body.get("user_type") == "additional":
@@ -773,7 +761,6 @@ else:
 check("POST /admin/users bad user_type",
       hit("POST", "/admin/users", headers=H,
           json={"username": "acct_bad1", "client_name": "AcctFull",
-                "email": "b1@acct.example", "mobile": "+15551230003",
                 "server_id": p2_server, "user_type": "banana"}),
       400, "VALIDATION_FAILED")
 
@@ -783,7 +770,7 @@ body = check("GET /admin/users?expand=true (report fields per row)",
              200)
 rows = body.get("users", [])
 report_keys = ("user_type", "partner_id", "partner_name",
-               "subscription_end", "start_date", "display_name", "ukey")
+               "subscription_end", "subscription_start", "display_name", "ukey")
 if rows and all(all(k in r for k in report_keys) for r in rows):
     PASS += 1
     print(" [PASS] every user row carries the full report field set")
@@ -801,8 +788,8 @@ else:
           % (rows[0].get("partner_name") if rows else "no rows"))
 
 
-# ─── 10b. Phase 4.1a: subscription_type + storage_gb + user start_date ──
-print("\n=== Phase 4.1a: subscription_type / storage_gb / user start_date ===")
+# ─── 10b. Phase 4.1a: subscription_type + storage_gb + user subscription_start ──
+print("\n=== Phase 4.1a: subscription_type / storage_gb / user subscription_start ===")
 
 # Client with subscription_type + storage_gb persists + returns them
 body = check("POST /admin/clients (subscription_type + storage_gb)",
@@ -862,52 +849,49 @@ else:
     FAIL += 1
     print(" [FAIL] PUT edit wrong: %s" % body)
 
-# User with explicit start_date persists + returns it
-body = check("POST /admin/users (explicit start_date)",
+# User with explicit subscription_start persists + returns it
+body = check("POST /admin/users (explicit subscription_start)",
              hit("POST", "/admin/users", headers=H,
                  json={"username": "v41_user1", "client_name": "AcctV41",
-                       "email": "u1@v41.example", "mobile": "+15551239001",
                        "server_id": p2_server, "user_type": "new",
-                       "start_date": "2026-03-15"}),
+                       "subscription_start": "2026-03-15"}),
              201)
-if body.get("start_date") == "2026-03-15":
+if body.get("subscription_start") == "2026-03-15":
     PASS += 1
-    print(" [PASS] explicit user start_date persisted")
+    print(" [PASS] explicit user subscription_start persisted")
 else:
     FAIL += 1
-    print(" [FAIL] expected start_date=2026-03-15, got %s" % body.get("start_date"))
+    print(" [FAIL] expected subscription_start=2026-03-15, got %s" % body.get("subscription_start"))
 
-# User without start_date -> defaults to today
-body = check("POST /admin/users (start_date omitted -> today)",
+# User without subscription_start -> defaults to today
+body = check("POST /admin/users (subscription_start omitted -> today)",
              hit("POST", "/admin/users", headers=H,
                  json={"username": "v41_user2", "client_name": "AcctV41",
-                       "email": "u2@v41.example", "mobile": "+15551239002",
                        "server_id": p2_server}),
              201)
-if body.get("start_date") == today_iso:
+if body.get("subscription_start") == today_iso:
     PASS += 1
-    print(" [PASS] omitted start_date defaults to today")
+    print(" [PASS] omitted subscription_start defaults to today")
 else:
     FAIL += 1
-    print(" [FAIL] expected start_date=%s, got %s" % (today_iso, body.get("start_date")))
+    print(" [FAIL] expected subscription_start=%s, got %s" % (today_iso, body.get("subscription_start")))
 
-# Invalid start_date -> 400
-check("POST /admin/users bad start_date",
+# Invalid subscription_start -> 400
+check("POST /admin/users bad subscription_start",
       hit("POST", "/admin/users", headers=H,
           json={"username": "v41_bad", "client_name": "AcctV41",
-                "email": "b@v41.example", "mobile": "+15551239003",
-                "server_id": p2_server, "start_date": "15-03-2026"}),
+                "server_id": p2_server, "subscription_start": "15-03-2026"}),
       400, "VALIDATION_FAILED")
 
-# GET /admin/users?expand=true rows carry start_date + subscription_type + storage_gb
+# GET /admin/users?expand=true rows carry subscription_start + subscription_type + storage_gb
 body = check("GET /admin/users?expand=true (v4.1a fields per row)",
              hit("GET", "/admin/users?expand=true&client_name=AcctV41", headers=H),
              200)
 rows = body.get("users", [])
-v41_keys = ("start_date", "subscription_type", "storage_gb", "user_type")
+v41_keys = ("subscription_start", "subscription_type", "storage_gb", "user_type")
 if rows and all(all(k in r for k in v41_keys) for r in rows):
     PASS += 1
-    print(" [PASS] user rows carry start_date + subscription_type + storage_gb")
+    print(" [PASS] user rows carry subscription_start + subscription_type + storage_gb")
 else:
     FAIL += 1
     print(" [FAIL] user rows missing v4.1a fields: %s"
@@ -929,9 +913,8 @@ rpt_client_id = body.get("id")
 def _mkuser(uname, utype, sdate):
     return hit("POST", "/admin/users", headers=H,
                json={"username": uname, "client_name": "RptAcct",
-                     "email": uname + "@rpt.example", "mobile": "+15550000000",
                      "server_id": p2_server, "user_type": utype,
-                     "start_date": sdate})
+                     "subscription_start": sdate})
 
 # New batch: 3 users @ 2026-01-01
 _mkuser("rpt_new1", "new", "2026-01-01")
@@ -1175,60 +1158,191 @@ else:
     FAIL += 1; print(" [FAIL] list missing contact fields: %s" % list(sample.keys()))
 
 
-# ─── 10e. Optional user email / mobile (v4.2) ─────────────────────
-print("\n=== Optional user email / mobile ===")
+# ─── 10e. Per-user email / mobile REMOVED (v4.3) ──────────────────
+# Contacts are account-level only: clients.contact_email / contact_mobile.
+# Sending either key to /admin/users is rejected outright rather than
+# silently ignored, so an old EXE cannot believe it stored a contact.
+print("\n=== Per-user email/mobile removed (account-level only) ===")
 
 check("POST /admin/clients (OptCT host)",
       hit("POST", "/admin/clients", headers=H,
-          json={"client_name": "OptCT", "ukey": "OPTC1234"}), 201)
+          json={"client_name": "OptCT", "ukey": "OPTC1234",
+                "contact_email": "Acct@Opt.Example, ops@opt.example",
+                "contact_mobile": "+919876543210, +919876543211"}), 201)
 
 def _optuser(extra):
     payload = {"client_name": "OptCT", "server_id": p2_server}
     payload.update(extra)
     return hit("POST", "/admin/users", headers=H, json=payload)
 
-# omitted email/mobile -> 201, both null
-body = check("POST user (no email/mobile)", _optuser({"username": "opt_none"}), 201)
-if body.get("email") is None and body.get("mobile") is None:
-    PASS += 1; print(" [PASS] omitted email/mobile stored + returned as null")
-else:
-    FAIL += 1; print(" [FAIL] expected null/null, got %s/%s" % (body.get("email"), body.get("mobile")))
-
-# explicit empty strings -> 201, both null
-body = check("POST user (email:'', mobile:'')",
-             _optuser({"username": "opt_empty", "email": "", "mobile": ""}), 201)
-if body.get("email") is None and body.get("mobile") is None:
-    PASS += 1; print(" [PASS] empty-string email/mobile -> null")
-else:
-    FAIL += 1; print(" [FAIL] expected null/null, got %s/%s" % (body.get("email"), body.get("mobile")))
-
-# valid email only, no mobile -> 201, email set (lowercased), mobile null
-body = check("POST user (email only)",
-             _optuser({"username": "opt_mailonly", "email": "Solo@Ex.Com"}), 201)
+# clean create (no contact keys) -> 201, and no email/mobile on the row
+body = check("POST user (no contact keys)", _optuser({"username": "opt_none"}), 201)
 opt_id = body.get("id")
-if body.get("email") == "solo@ex.com" and body.get("mobile") is None:
-    PASS += 1; print(" [PASS] email-only: email lowercased, mobile null")
+if "email" not in body and "mobile" not in body:
+    PASS += 1; print(" [PASS] user row carries no per-user email/mobile")
 else:
-    FAIL += 1; print(" [FAIL] got %s/%s" % (body.get("email"), body.get("mobile")))
+    FAIL += 1; print(" [FAIL] user row still exposes email/mobile: %s" % body)
 
-# invalid email / mobile -> 400 (format only checked when non-empty)
-check("POST user (bad email)", _optuser({"username": "opt_bade", "email": "not-an-email"}),
-      400, "VALIDATION_FAILED")
-check("POST user (bad mobile)", _optuser({"username": "opt_badm", "mobile": "12"}),
+# the account contact rides along on the user row via the client join
+if (body.get("contact_email") == "acct@opt.example,ops@opt.example"
+        and body.get("contact_mobile") == "+919876543210,+919876543211"):
+    PASS += 1; print(" [PASS] account contact_email/contact_mobile on the user row")
+else:
+    FAIL += 1; print(" [FAIL] contact fields wrong: %s / %s"
+                     % (body.get("contact_email"), body.get("contact_mobile")))
+
+# sending either key -> 400, naming the replacement
+for key, val in (("email", "x@y.com"), ("mobile", "+919999999999")):
+    body = check("POST user (%s rejected)" % key,
+                 _optuser({"username": "opt_%s" % key, key: val}),
+                 400, "VALIDATION_FAILED")
+    det = " ".join(body.get("details") or [])
+    if "contact_email" in det and "contact_mobile" in det:
+        PASS += 1; print(" [PASS] %s rejection points at the account-level fields" % key)
+    else:
+        FAIL += 1; print(" [FAIL] unhelpful message: %r" % det)
+
+# same on PUT
+check("PUT user (email rejected)",
+      hit("PUT", "/admin/users/%s" % opt_id, headers=H, json={"email": ""}),
       400, "VALIDATION_FAILED")
 
 # still-required fields missing -> 400
 check("POST user (missing username/client/server)",
-      hit("POST", "/admin/users", headers=H, json={"email": "x@y.com"}),
+      hit("POST", "/admin/users", headers=H, json={}),
       400, "VALIDATION_FAILED")
 
-# PUT email:'' clears to null; mobile left unchanged (key omitted)
-body = check("PUT user (clear email)",
-             hit("PUT", "/admin/users/%s" % opt_id, headers=H, json={"email": ""}), 200)
-if body.get("email") is None:
-    PASS += 1; print(" [PASS] PUT email:'' cleared to null")
+# contact_mobile is multi-value now (v4.3) -- and single still works
+body = check("POST /admin/clients (single contact_mobile still OK)",
+             hit("POST", "/admin/clients", headers=H,
+                 json={"client_name": "OneMob", "ukey": "ONEMOB12",
+                       "contact_mobile": "+919876500000"}), 201)
+if body.get("contact_mobile") == "+919876500000":
+    PASS += 1; print(" [PASS] single contact_mobile unchanged (back-compat)")
 else:
-    FAIL += 1; print(" [FAIL] expected null, got %s" % body.get("email"))
+    FAIL += 1; print(" [FAIL] got %r" % body.get("contact_mobile"))
+
+check("POST /admin/clients (bad number in contact_mobile list)",
+      hit("POST", "/admin/clients", headers=H,
+          json={"client_name": "BadMob", "ukey": "BADMOB12",
+                "contact_mobile": "+919876500000,nope"}), 400, "VALIDATION_FAILED")
+
+
+# --- 10f. v4.3: legacy migration (user_type='migrated' + provenance) ---
+print("\n=== v4.3: legacy migration ===")
+
+body = check("POST /admin/clients (migrated, legacy + back-dated start)",
+             hit("POST", "/admin/clients", headers=H,
+                 json={"client_name": "MigCT", "display_name": "Migrated Co",
+                       "ukey": "MIGC1234",
+                       "legacy_server_name": "moc1",
+                       "legacy_server_ip": "10.0.0.14",
+                       "subscription_start": "2025-12-01",
+                       "subscription_end": "2026-11-30"}), 201)
+mig_client_id = body.get("id")
+# subscription_start is per-USER now: the client must NOT store it, but the
+# back-dated value still drives the shared expiry.
+if (body.get("legacy_server_name") == "moc1"
+        and body.get("legacy_server_ip") == "10.0.0.14"
+        and body.get("subscription_start") is None
+        and body.get("subscription_end") == "2026-11-30"):
+    PASS += 1; print(" [PASS] legacy_* stored; client does NOT store subscription_start")
+else:
+    FAIL += 1; print(" [FAIL] legacy/start wrong: %s" % body)
+
+body = check("POST /admin/users (user_type=migrated)",
+             hit("POST", "/admin/users", headers=H,
+                 json={"username": "MigCT_admin1", "client_name": "MigCT",
+                       "server_id": p2_server, "user_type": "migrated",
+                       "subscription_start": "2025-12-01"}), 201)
+if body.get("user_type") == "migrated" and body.get("subscription_start") == "2025-12-01":
+    PASS += 1; print(" [PASS] user_type='migrated' + back-dated subscription_start stored")
+else:
+    FAIL += 1; print(" [FAIL] expected migrated/2025-12-01, got %s/%s"
+                     % (body.get("user_type"), body.get("subscription_start")))
+
+# server_id must be the CURRENT target; legacy_* is provenance only.
+if body.get("server_id") == p2_server and body.get("legacy_server_name") == "moc1":
+    PASS += 1; print(" [PASS] server_id = current server; legacy_* joined from client")
+else:
+    FAIL += 1; print(" [FAIL] routing/provenance mixed up: %s" % body)
+
+hit("POST", "/admin/users", headers=H,
+    json={"username": "MigCT_user2", "client_name": "MigCT",
+          "server_id": p2_server, "user_type": "additional",
+          "subscription_start": "2026-08-04"})
+
+body = check("POST /admin/users (user_type='MIGRATED')",
+             hit("POST", "/admin/users", headers=H,
+                 json={"username": "MigCT_case", "client_name": "MigCT",
+                       "server_id": p2_server, "user_type": "MIGRATED"}), 201)
+if body.get("user_type") == "migrated":
+    PASS += 1; print(" [PASS] 'MIGRATED' normalized to 'migrated'")
+else:
+    FAIL += 1; print(" [FAIL] expected 'migrated', got %s" % body.get("user_type"))
+
+body = check("GET /admin/users?user_type=migrated",
+             hit("GET", "/admin/users?client_name=MigCT&user_type=migrated", headers=H), 200)
+rows = body.get("rows", [])
+if len(rows) == 2 and all(r["user_type"] == "migrated" for r in rows):
+    PASS += 1; print(" [PASS] user_type=migrated filter returns only migrated batches")
+else:
+    FAIL += 1; print(" [FAIL] migrated filter wrong: %s" % rows)
+
+body = check("GET /admin/users?client_name=MigCT",
+             hit("GET", "/admin/users?client_name=MigCT", headers=H), 200)
+summ = body.get("summary", {})
+types = sorted({r["user_type"] for r in body.get("rows", [])})
+if types == ["additional", "migrated"]:
+    PASS += 1; print(" [PASS] migrated + additional are separate batches")
+else:
+    FAIL += 1; print(" [FAIL] expected both batch types, got %s" % types)
+
+if (summ.get("migrated_users") == 2 and summ.get("additional_users") == 1
+        and summ.get("new_users") == 0
+        and summ.get("new_users") + summ.get("additional_users")
+            + summ.get("migrated_users") == summ.get("total_users")):
+    PASS += 1; print(" [PASS] summary splits 2 migrated / 1 additional / 0 new, sums to total")
+else:
+    FAIL += 1; print(" [FAIL] summary split wrong: %s" % summ)
+
+# Write-once: PUT must not overwrite legacy_*; a real PUT bumps updated_at.
+hit("PUT", "/admin/clients/%s" % mig_client_id, headers=H,
+    json={"display_name": "Migrated Co Ltd"})
+body = check("GET /admin/clients/exists/MigCT (after PUT)",
+             hit("GET", "/admin/clients/exists/MigCT", headers=H), 200)
+if (body.get("legacy_server_name") == "moc1"
+        and body.get("legacy_server_ip") == "10.0.0.14"
+        and body.get("updated_at") is not None):
+    PASS += 1; print(" [PASS] write-once: legacy_* survived PUT; clients.updated_at bumped")
+else:
+    FAIL += 1; print(" [FAIL] write-once violated: %s" % body)
+
+body = check("POST /admin/users (user_type=banana)",
+             hit("POST", "/admin/users", headers=H,
+                 json={"username": "MigCT_bad", "client_name": "MigCT",
+                       "server_id": p2_server, "user_type": "banana"}),
+             400, "VALIDATION_FAILED")
+det = " ".join(body.get("details") or [])
+if all(v in det for v in ("'new'", "'additional'", "'migrated'")):
+    PASS += 1; print(" [PASS] error message names all three valid user_type values")
+else:
+    FAIL += 1; print(" [FAIL] message missing a value: %r" % det)
+
+check("POST /admin/clients (bad legacy_server_ip octet)",
+      hit("POST", "/admin/clients", headers=H,
+          json={"client_name": "MigBad", "ukey": "MIGB1234",
+                "legacy_server_ip": "10.0.0.999"}), 400, "VALIDATION_FAILED")
+
+body = check("POST /admin/clients (pre-v4.3 body shape)",
+             hit("POST", "/admin/clients", headers=H,
+                 json={"client_name": "PlainCT", "display_name": "Plain",
+                       "ukey": "PLAIN123"}), 201)
+if (body.get("legacy_server_name") is None and body.get("legacy_server_ip") is None
+        and body.get("updated_at") is None):
+    PASS += 1; print(" [PASS] absent legacy_* -> null; updated_at null until first PUT")
+else:
+    FAIL += 1; print(" [FAIL] expected nulls, got %s" % body)
 
 
 # ─── 11. Verify request_log captured everything ─────────────────

@@ -55,16 +55,30 @@ def user_create():
                 conn,
                 cleaned["username"],
                 cleaned["client_name"],
-                cleaned.get("email", ""),
-                cleaned.get("mobile", ""),
+                # v4.3: contacts are account-level only. The columns are still
+                # NOT NULL, so '' satisfies the schema while nothing reads them.
+                "", "",
                 cleaned["server_id"],
                 cleaned.get("is_active", 1),
                 cleaned.get("user_type", "new"),
-                # v4.1: per-user subscription start; default to today so
-                # every user of one Setup/Add-Users event shares a date.
-                cleaned.get("start_date") or config.today_ist(),
+                # v4.1: per-user subscription start (renamed from start_date
+                # in v4.3); default to today so every user of one
+                # Setup/Add-Users event shares a date. A supplied value wins.
+                cleaned.get("subscription_start") or config.today_ist(),
             )
         except sqlite3.IntegrityError as e:
+            # A CHECK-constraint failure is NOT a duplicate username. The only
+            # reachable CHECK on `users` is the user_type enum (is_active is
+            # already constrained to 0/1 by the BL), and a DB whose `users`
+            # table was CREATEd before v4.3 still carries the 2-value
+            # CHECK(user_type IN ('new','additional')) -- SQLite cannot ALTER
+            # it. Without this branch that surfaces as a 409 "Username already
+            # exists", which is actively misleading. See init_db.py.
+            if "check constraint" in str(e).lower():
+                log.error("user_type CHECK rejected value %r -- this DB predates "
+                          "v4.3 and needs the widened CHECK on `users`: %s",
+                          cleaned.get("user_type", "new"), e)
+                return error(M.CODE_VALIDATION_FAILED, M.MSG_INVALID_USER_TYPE, 400, detail=str(e))
             return error(M.CODE_USERNAME_EXISTS, M.MSG_USERNAME_EXISTS, 409, detail=str(e))
 
     log.info("User created: id=%s username=%s", row["id"], cleaned['username'])
@@ -76,7 +90,7 @@ def user_create():
 def user_list():
     """User-wise Report (v4.1b).
 
-    DEFAULT: grouped rows -- one per (client × user_type × start_date) --
+    DEFAULT: grouped rows -- one per (client × user_type × subscription_start) --
     plus a `summary` block for the dashboard cards. This is the report grain.
 
     `expand=true`: individual per-user rows (the pre-v4.1b shape, kept for
@@ -116,11 +130,30 @@ def user_list():
                            else "mixed")
             out.append(d)
 
+    # Per-type user counts (v4.3). PURELY ADDITIVE -- the four pre-existing
+    # totals are unchanged, and total_users still counts every user
+    # regardless of type (migrated users ARE users). The three type counts
+    # sum to total_users, so a mismatch is a visible bug.
+    #
+    # 'migrated' is deliberately NOT folded into any "new" figure: a migrated
+    # customer is not new business, and conflating them is the exact
+    # misreporting this feature exists to prevent.
+    #
+    # Like every figure here these respect the active filters, so
+    # ?user_type=migrated reports new_users=0 -- consistent with how
+    # total_users already behaves.
+    def _users_of_type(t):
+        return sum(d.get("no_of_users") or 0 for d in out
+                   if (d.get("user_type") or "") == t)
+
     summary = {
         "total_customer_ids": len({(d["client_name"] or "").lower() for d in out}),
         "total_users":        sum(d.get("no_of_users")     or 0 for d in out),
         "active_users":       sum(d.get("active_users")    or 0 for d in out),
         "deactive_users":     sum(d.get("inactive_users")  or 0 for d in out),
+        "new_users":          _users_of_type("new"),
+        "additional_users":   _users_of_type("additional"),
+        "migrated_users":     _users_of_type("migrated"),
     }
     return jsonify({"summary": summary, "rows": out, "count": len(out)})
 

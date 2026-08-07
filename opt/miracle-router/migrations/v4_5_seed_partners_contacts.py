@@ -28,7 +28,7 @@ For every user of that client (EVENT-BASED):
     user_type          <- 'new' for users created on/before the client's start
                           date (its first provisioning event); 'additional' for
                           users created on a LATER date (a subsequent purchase).
-    start_date         <- 'new' users: the client start date. 'additional'
+    subscription_start <- 'new' users: the client start date. 'additional'
                           users: their own creation date (when the seat began).
 
 SAFETY (this is live data):
@@ -44,7 +44,8 @@ SAFETY (this is live data):
 
 PRE-REQ: run init_db.py first so the columns exist (contact_email,
 contact_mobile, subscription_type, storage_gb, subscription_end,
-users.user_type, users.start_date). The script refuses to run otherwise.
+users.user_type, users.subscription_start). The script refuses to run otherwise.
+NOTE: on a pre-v4.3 DB run migrations/v4_7_rename_start_date.py first.
 
 Usage (root, after deploy.sh runs init_db.py):
     sudo python3 /opt/miracle-router/migrations/v4_5_seed_partners_contacts.py --dry-run
@@ -230,7 +231,7 @@ CLIENT_PARTNER_MAP = [
 ]
 
 # ─── 3rd map: customer_id -> subscription start date (reviewed, from the team
-# Excel). Drives subscription_end (start +1yr -1day) and each user's start_date.
+# Excel). Drives subscription_end (start +1yr -1day) and each user's subscription_start.
 # Customers NOT listed here (test accounts) fall back to their created_at date.
 CLIENT_START = {
     '1484':   '2026-07-02',
@@ -320,7 +321,7 @@ CLIENT_START = {
 REQUIRED = {
     "clients": ("partner_id", "subscription_type", "storage_gb",
                 "subscription_end", "contact_email", "contact_mobile"),
-    "users":   ("user_type", "start_date"),
+    "users":   ("user_type", "subscription_start"),
 }
 
 
@@ -396,7 +397,7 @@ def main():
             in_seed = cid in CLIENT_START
             start = CLIENT_START.get(cid) or c["cd"]  # test accounts -> created date
             urows = conn.execute(
-                "SELECT id, email, mobile, %s cd FROM users "
+                "SELECT id, email, mobile, user_type, %s cd FROM users "
                 "WHERE client_name=? COLLATE NOCASE ORDER BY id" % cd_ist, (cid,)
             ).fetchall()
             nusers = len(urows)
@@ -418,7 +419,14 @@ def main():
                 new_start = base or earliest
                 for u in urows:
                     cd = u["cd"] or ""
-                    if cd > anchor:
+                    # v4.3: a row already classified 'migrated' is authoritative
+                    # -- the desktop tool set it deliberately. Carry it through
+                    # unchanged so it is neither re-written below nor counted
+                    # in n_additional (which the verification compares against
+                    # the DB's 'additional' count).
+                    if (u["user_type"] or "").strip().lower() == "migrated":
+                        users_plan.append((u["id"], "migrated", cd))
+                    elif cd > anchor:
                         users_plan.append((u["id"], "additional", cd))
                     else:
                         users_plan.append((u["id"], "new", new_start))
@@ -461,7 +469,7 @@ def main():
             print("Would set fields on        :", len(plan), "clients")
             n_add = sum(p["n_additional"] for p in plan)
             add_clients = [p for p in plan if p["n_additional"]]
-            print("Would set start_date on all users (fill-only).")
+            print("Would set subscription_start on all users (fill-only).")
             print("Would mark %d user(s) as 'additional' across %d client(s)."
                   % (n_add, len(add_clients)))
             for p in add_clients:
@@ -537,19 +545,29 @@ def main():
                 conn.execute("UPDATE clients SET contact_mobile=? WHERE id=? AND contact_mobile IS NULL",
                              (p["mobile"], p["id"]))
             # users of this client -- event-based (see plan build).
-            #   start_date : FILL-ONLY (column is nullable) -- 'new' users get
+            #   subscription_start : FILL-ONLY (nullable) -- 'new' users get
             #                the client start date, 'additional' get their own
             #                creation date.
             #   user_type  : every row carries the schema default 'new', so
             #                'additional' must be WRITTEN. We only ever flip a
             #                row that is NOT already 'additional' -> idempotent,
             #                never reverts an existing 'additional' to 'new'.
+            #
+            # v4.3 guard: 'migrated' rows are NEVER touched. This backfill
+            # classifies by creation date (cd > anchor -> 'additional'), but a
+            # migrated customer is back-dated by design -- its users are
+            # created today while its start date is months in the past. A
+            # migrated batch provisioned across two calendar days would have
+            # its day-2 users silently reclassified 'migrated' -> 'additional',
+            # destroying the very distinction this column now carries. These
+            # writes have no user_version gate, so the script CAN be re-run.
             for uid, ut, sd in p["users"]:
-                conn.execute("UPDATE users SET start_date=? WHERE id=? AND start_date IS NULL",
+                conn.execute("UPDATE users SET subscription_start=? WHERE id=? AND subscription_start IS NULL",
                              (sd, uid))
                 if ut == "additional":
                     conn.execute("UPDATE users SET user_type='additional' "
-                                 "WHERE id=? AND user_type<>'additional'", (uid,))
+                                 "WHERE id=? AND user_type NOT IN ('additional','migrated')",
+                                 (uid,))
 
         conn.execute("COMMIT")
 
@@ -593,10 +611,10 @@ def main():
         if absent_from_db:
             print("  NOTE: %d mapped customer(s) NOT in clients -> skipped: %s"
                   % (len(absent_from_db), ", ".join(absent_from_db)))
-        chk("users missing start_date", conn.execute("SELECT COUNT(*) FROM users WHERE start_date IS NULL").fetchone()[0], 0)
+        chk("users missing subscription_start", conn.execute("SELECT COUNT(*) FROM users WHERE subscription_start IS NULL").fetchone()[0], 0)
         chk("users missing user_type", conn.execute("SELECT COUNT(*) FROM users WHERE user_type IS NULL OR TRIM(user_type)=''").fetchone()[0], 0)
         # Event-based user_type: DB 'additional' count must match what we planned,
-        # and every 'additional' user must carry a start_date > its client start.
+        # and every 'additional' user must carry a subscription_start > its client start.
         planned_add = sum(p["n_additional"] for p in plan)
         db_add = conn.execute("SELECT COUNT(*) FROM users WHERE user_type='additional'").fetchone()[0]
         chk("additional users match plan", db_add, planned_add)

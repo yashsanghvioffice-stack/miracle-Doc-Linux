@@ -145,7 +145,7 @@ MSG_PARTNER_IN_USE_HINT             = "Deactivate (is_active=0) instead of delet
 MSG_INVALID_PARTNER_ID              = "partner_id must be an integer"
 MSG_UNKNOWN_PARTNER_TMPL            = "partner_id {} does not reference an existing partner"
 MSG_INVALID_DATE_TMPL               = "{} must be a valid date in YYYY-MM-DD format"
-MSG_INVALID_USER_TYPE               = "user_type must be 'new' or 'additional'"
+MSG_INVALID_USER_TYPE               = "user_type must be 'new', 'additional' or 'migrated'"
 
 # ─── v4.1: subscription type + storage ────────────────────────────
 MSG_INVALID_SUBSCRIPTION_TYPE       = "subscription_type must be 'single' or 'multi'"
@@ -158,7 +158,17 @@ MSG_PARTNER_EMAIL_REQUIRED          = "Partner email is required"
 # ─── v4.1 migration: account-level customer contact ───────────────
 MSG_INVALID_CONTACT_EMAIL           = "contact_email must be one or more valid email addresses, comma-separated"
 MSG_TOO_MANY_CONTACT_EMAILS         = "contact_email accepts at most 20 addresses"
-MSG_INVALID_CONTACT_MOBILE          = "contact_mobile must be 7-15 digits, optional + prefix"
+MSG_INVALID_CONTACT_MOBILE          = "contact_mobile must be one or more mobile numbers (7-15 digits, optional + prefix), comma-separated"
+MSG_TOO_MANY_CONTACT_MOBILES        = "contact_mobile accepts at most 20 numbers"
+
+# v4.3: per-user contacts consolidated onto the client. `{}` is the rejected key.
+MSG_USER_CONTACT_REMOVED_TMPL       = ("{} is no longer accepted on /admin/users -- contact details are "
+                                       "account-level: send contact_email / contact_mobile on /admin/clients")
+
+# ─── v4.3: legacy migration provenance ────────────────────────────
+MSG_INVALID_LEGACY_SERVER_NAME      = "legacy_server_name must be 1-64 chars (letters, digits, _ - . space)"
+MSG_INVALID_LEGACY_SERVER_IP        = "legacy_server_ip must be a valid IPv4 address"
+MSG_INVALID_LEGACY_SERVER_IP_OCTET  = "legacy_server_ip octets must be 0-255"
 
 
 # =================================================================
