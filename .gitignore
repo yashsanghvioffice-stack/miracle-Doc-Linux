@@ -49,5 +49,8 @@ Thumbs.db
 *.db
 *.docx
 
-
-
+# SQLite sidecars + ad-hoc backups (never belong in git)
+*.db-shm
+*.db-wal
+*.db.*.bak
+*.bak

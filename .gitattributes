@@ -1,0 +1,14 @@
+# The gateway is Linux; these files are executed there.
+#
+# eol=lf: guards against a Windows editor writing CRLF into a shebang line.
+# A "#!/bin/bash\r" makes the kernel look for an interpreter literally named
+# "/bin/bash\r". Not the cause of any past incident -- a precaution.
+*.sh          text eol=lf
+*.py          text eol=lf
+*.service     text eol=lf
+miracle.cloud text eol=lf
+
+# Binaries -- never let git guess or munge these.
+*.db   binary
+*.xlsx binary
+*.docx binary
